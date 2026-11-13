@@ -20,23 +20,47 @@ app.add_typer(runs_app, name="runs")
 
 @data_app.command("download")
 def data_download(slices: Optional[list[str]] = typer.Option(None, "--slice", help="e.g. slack_slice_0001 (repeatable). Default: all_documents.zip")):
-    """Download questions.jsonl and the documents into data/raw/."""
+    """Download EnterpriseRAG-Bench questions.jsonl and documents into data/raw/."""
     from . import data
     data.download(slices)
 
 
 @data_app.command("load")
 def data_load():
-    """Load every zip in data/raw/ into data/corpus.duckdb."""
+    """Ingest the downloaded EnterpriseRAG-Bench release (data/raw/) as dataset 'enterprise_rag_bench'."""
     from . import data
-    data.load()
+    data.ingest(data.BENCH, paths.RAW, adapter=data.BENCH, sync=True, note="EnterpriseRAG-Bench release")
+
+
+@data_app.command("add")
+def data_add(dataset: str = typer.Argument(..., help="Dataset name, e.g. my_docs"),
+             path: str = typer.Argument(..., help="Folder (folder adapter) or release dir/zip (bench adapter)"),
+             adapter: Optional[str] = typer.Option(None, help="folder | enterprise_rag_bench (default: folder for new datasets)"),
+             sync: bool = typer.Option(False, help="Treat PATH as the full dataset: docs missing from it are deleted"),
+             note: str = ""):
+    """Incrementally add docs (new/changed) to a dataset, creating a new snapshot."""
+    from . import data
+    data.ingest(dataset, path, adapter=adapter, sync=sync, note=note)
+
+
+@data_app.command("list")
+def data_list():
+    """Datasets, their snapshots and doc counts."""
+    from . import data
+    con = data.connect(read_only=True)
+    for d in data.dataset_info(con):
+        typer.echo(f"{d['name']} ({d['adapter']}): snapshot {d['latest_snapshot']}, {sum(d['by_source'].values()):,} docs, "
+                   f"{d['n_questions']} questions, subsets {d['subsets'] or '-'}")
+        for s in d["snapshots"]:
+            typer.echo(f"  #{s['snapshot']} {s['created_at'][:19]}  +{s['added']} ~{s['changed']} -{s['deleted']}  -> {s['n_docs']:,}  {s['note']}")
 
 
 @data_app.command("subset")
-def data_subset(name: str = "dev", per_category: int = 10, distractors: int = 20_000, seed: int = 42):
+def data_subset(name: str = "dev", dataset: str = "enterprise_rag_bench", per_category: int = 10,
+                distractors: int = 20_000, seed: int = 42):
     """Build a dev subset: N questions per category + their gold docs + random distractors."""
     from . import data
-    data.build_subset(name, per_category, distractors, seed)
+    data.build_subset(dataset, name, per_category, distractors, seed)
 
 
 @bench_app.command("setup")

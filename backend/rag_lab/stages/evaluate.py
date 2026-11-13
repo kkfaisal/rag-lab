@@ -21,7 +21,7 @@ from ..registry import register
 from .base import StageContext, read_jsonl, unique_docs, write_jsonl
 
 
-class BenchmarkEvalConfig(BaseModel):
+class StandardEvalConfig(BaseModel):
     model_config = {"extra": "forbid"}
     judge: bool | str = "auto"              # auto = run the judge if an API key is set and answers exist
     judge_model: str = "claude-sonnet-5-5"
@@ -44,8 +44,8 @@ def aggregate(rows: list[dict]) -> dict:
     return {"n": len(rows), **{k: _mean(r.get(k) for r in rows) for k in keys}}
 
 
-@register("evaluate", "benchmark", BenchmarkEvalConfig)
-def benchmark_eval(cfg: BenchmarkEvalConfig, ctx: StageContext) -> dict:
+@register("evaluate", "standard", StandardEvalConfig)
+def standard_eval(cfg: StandardEvalConfig, ctx: StageContext) -> dict:
     retrieved = {r["question_id"]: unique_docs(r["chunks"]) for r in read_jsonl(ctx.dirs["retrieve"] / "retrieval.jsonl")}
     gens = {g["question_id"]: g for g in read_jsonl(ctx.dirs["generate"] / "generations.jsonl")}
     answers_file = ctx.dirs["generate"] / "answers.jsonl"

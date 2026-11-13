@@ -1,7 +1,7 @@
 """Run configs: YAML in, fully-resolved (all defaults filled in) dict out.
 
     name: baseline
-    data: {subset: dev}
+    data: {dataset: enterprise_rag_bench, subset: dev, snapshot: latest}
     chunk: {impl: fixed, chunk_size: 1200}
     ...
 
@@ -21,7 +21,9 @@ from .registry import STAGES, get
 
 class DataConfig(BaseModel):
     model_config = {"extra": "forbid"}
-    subset: str = "dev"
+    dataset: str = "enterprise_rag_bench"
+    subset: str = "dev"                  # a named subset, or "all"
+    snapshot: int | str = "latest"       # resolved to a number when the run starts
 
 
 def load_yaml(path: str | Path) -> dict:
@@ -36,7 +38,10 @@ def apply_overrides(raw: dict, overrides: list[str]) -> dict:
         *parents, leaf = key.split(".")
         for p in parents:
             node = node.setdefault(p, {})
-        node[leaf] = yaml.safe_load(value)
+        new = yaml.safe_load(value)
+        if leaf == "impl" and node.get("impl") != new:
+            node.clear()          # switching implementation: the old impl's params don't apply
+        node[leaf] = new
     return raw
 
 

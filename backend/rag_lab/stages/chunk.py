@@ -1,9 +1,13 @@
 """chunk: split documents into retrievable pieces.
 
-Outputs chunks.parquet with columns chunk_id, doc_id, source, title, text.
+Outputs chunks.parquet with columns chunk_id, doc_id, source, title, text, text_hash.
 chunk_id is "<doc_id>#<n>". Sizes are in characters (~4 chars per token).
+
+Chunks are cached per document *content hash* in a store shared by every run
+using the same chunker settings, so adding 1k docs to a dataset chunks only those 1k.
 """
 
+import hashlib
 import re
 
 import pyarrow as pa
@@ -19,6 +23,7 @@ class FixedConfig(BaseModel):
     chunk_size: int = 1200
     overlap: int = 150
     prepend_title: bool = True      # prefix every chunk with the doc title so it carries context
+    title_max_chars: int = 200      # some Slack docs open with a long summary line; don't prepend all of it
 
 
 class SlackAwareConfig(FixedConfig):
@@ -76,23 +81,46 @@ def split_slack_thread(body: str, size: int, overlap: int, root_chars: int) -> l
 
 
 def _write_chunks(ctx: StageContext, cfg: FixedConfig, split_doc) -> dict:
-    docs = pq.read_table(ctx.dirs["load"] / "docs.parquet").to_pylist()
-    rows = {k: [] for k in ["chunk_id", "doc_id", "source", "title", "text"]}
-    for d in docs:
+    """Chunk only docs whose content hash isn't in this chunker's store yet, then
+    assemble chunks.parquet for this run's docs from the store."""
+    docs = pq.read_table(ctx.dirs["load"] / "docs.parquet")
+    store = ctx.store("chunk")
+    store.execute("""CREATE TABLE IF NOT EXISTS chunked(content_hash VARCHAR PRIMARY KEY);
+                     CREATE TABLE IF NOT EXISTS chunks(content_hash VARCHAR, i INTEGER, text VARCHAR, text_hash VARCHAR)""")
+    store.register("docs", docs.select(["doc_id", "source", "title", "content_hash"]))
+    todo = {h for (h,) in store.execute("SELECT DISTINCT content_hash FROM docs ANTI JOIN chunked USING (content_hash)").fetchall()}
+
+    new = {k: [] for k in ["content_hash", "i", "text", "text_hash"]}
+    processed = []                                 # includes docs that yield zero chunks
+    for d in docs.to_pylist():
+        if d["content_hash"] not in todo:
+            continue
+        todo.discard(d["content_hash"])            # identical content in two docs: chunk once
+        processed.append(d["content_hash"])
         title = d["title"] or ""
         body = d["text"][len(title):].lstrip("\n") if d["text"].startswith(title) else d["text"]
+        title = title[: cfg.title_max_chars]
         for i, piece in enumerate(split_doc(d, body)):
             text = f"{title}\n{piece}" if cfg.prepend_title and title else piece
-            rows["chunk_id"].append(f"{d['doc_id']}#{i}")
-            rows["doc_id"].append(d["doc_id"])
-            rows["source"].append(d["source"])
-            rows["title"].append(title)
-            rows["text"].append(text)
-    pq.write_table(pa.table(rows), ctx.out / "chunks.parquet")
-    n = len(rows["chunk_id"])
-    ctx.log(f"{n:,} chunks from {len(docs):,} docs")
-    lengths = [len(t) for t in rows["text"]] or [0]
-    return {"n_chunks": n, "n_docs": len(docs), "avg_chars": round(sum(lengths) / len(lengths)), "max_chars": max(lengths)}
+            new["content_hash"].append(d["content_hash"])
+            new["i"].append(i)
+            new["text"].append(text)
+            new["text_hash"].append(hashlib.sha256(text.encode()).hexdigest()[:32])
+    n_new_docs = len(processed)
+    if new["i"]:
+        store.register("new_chunks", pa.table(new))
+        store.execute("INSERT INTO chunks SELECT * FROM new_chunks")
+    store.register("newly_chunked", pa.table({"content_hash": pa.array(processed, pa.string())}))
+    store.execute("INSERT OR IGNORE INTO chunked SELECT content_hash FROM newly_chunked")
+
+    store.execute(f"""COPY (SELECT d.doc_id || '#' || c.i AS chunk_id, d.doc_id, d.source, d.title, c.text, c.text_hash
+                            FROM docs d JOIN chunks c USING (content_hash) ORDER BY d.doc_id, c.i)
+                      TO '{ctx.out / "chunks.parquet"}' (FORMAT parquet)""")
+    n, avg, mx = store.execute(f"SELECT count(*), avg(length(text)), max(length(text)) FROM '{ctx.out / 'chunks.parquet'}'").fetchone()
+    store.close()
+    ctx.log(f"{n:,} chunks from {docs.num_rows:,} docs ({n_new_docs:,} docs newly chunked, the rest from the store)")
+    return {"n_chunks": n, "n_docs": docs.num_rows, "docs_chunked": n_new_docs,
+            "docs_reused": docs.num_rows - n_new_docs, "avg_chars": round(avg or 0), "max_chars": mx}
 
 
 @register("chunk", "fixed", FixedConfig)

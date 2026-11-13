@@ -10,6 +10,7 @@ from datetime import datetime
 
 from . import bench, cache, data, paths, tracking
 from .config import apply_overrides, load_yaml, resolve
+from .datasets import get_adapter
 from .registry import STAGES, get
 from .stages.base import StageContext
 
@@ -22,12 +23,14 @@ ARTIFACTS = {
 }
 
 
-def _resolve_judge(cfg: dict) -> None:
+def _resolve_judge(cfg: dict, evaluator: str) -> None:
     """Turn evaluate.judge = "auto" into true/false *before* hashing, so the cache
     key and config.json say what actually happened."""
     ev = cfg["evaluate"]
+    if ev.get("judge") is True and evaluator != "benchmark":
+        raise SystemExit(f"evaluate.judge=true, but dataset {cfg['data']['dataset']!r} has no benchmark judge")
     if ev.get("judge") == "auto":
-        reasons = []
+        reasons = [] if evaluator == "benchmark" else [f"dataset {cfg['data']['dataset']!r} has no benchmark judge"]
         if not os.environ.get("ANTHROPIC_API_KEY"):
             reasons.append("ANTHROPIC_API_KEY not set")
         if cfg["generate"]["impl"] == "none":
@@ -41,14 +44,19 @@ def _resolve_judge(cfg: dict) -> None:
 
 def run(config_path: str, overrides: list[str] | None = None, limit: int | None = None) -> str:
     cfg = resolve(apply_overrides(load_yaml(config_path), overrides or []))
-    _resolve_judge(cfg)
 
     corpus = data.connect(read_only=True)
-    subset = cfg["data"]["subset"]
-    qids = data.subset_question_ids(corpus, subset, limit)
-    questions = data.load_questions(corpus, qids)
-    docs_hash = corpus.execute(
-        "SELECT md5(string_agg(doc_id, ',' ORDER BY doc_id)) FROM subset_docs WHERE subset=?", [subset]).fetchone()[0]
+    dataset, subset = cfg["data"]["dataset"], cfg["data"]["subset"]
+    row = corpus.execute("SELECT adapter FROM datasets WHERE name=?", [dataset]).fetchone()
+    if not row:
+        raise SystemExit(f"Unknown dataset {dataset!r}. Ingest it first with `rag-lab data add`.")
+    if cfg["data"]["snapshot"] == "latest":
+        cfg["data"]["snapshot"] = data.latest_snapshot(corpus, dataset)
+    snapshot = int(cfg["data"]["snapshot"])
+    _resolve_judge(cfg, get_adapter(row[0]).evaluator)
+    qids = data.subset_question_ids(corpus, dataset, subset, limit)
+    questions = data.load_questions(corpus, dataset, qids)
+    docs_hash, n_docs = data.docs_fingerprint(corpus, dataset, snapshot, subset)
 
     started = time.time()
     run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{cfg['name']}"
@@ -58,15 +66,15 @@ def run(config_path: str, overrides: list[str] | None = None, limit: int | None 
     code_hashes = {s: {"impl": cfg[s]["impl"], "hash": get(s, cfg[s]["impl"]).code_hash()} for s in STAGES}
     (run_dir / "code_hashes.json").write_text(json.dumps(code_hashes, indent=2))
     run = {"run_id": run_id, "name": cfg["name"], "created_at": datetime.now().isoformat(timespec="seconds"),
-           "status": "running", "subset": subset, "limit": limit, "n_questions": len(qids),
+           "status": "running", "dataset": dataset, "snapshot": snapshot, "subset": subset, "n_docs": n_docs, "limit": limit, "n_questions": len(qids),
            "question_ids": qids, "git": tracking.git_info(run_dir), "bench_commit": bench.commit_sha()}
-    print(f"Run {run_id}: {len(qids)} questions, subset '{subset}'")
+    print(f"Run {run_id}: {dataset} snapshot {snapshot}, subset '{subset}': {n_docs:,} docs, {len(qids)} questions")
 
     stage_log, upstream, dirs, metas = [], None, {}, {}
     try:
         for stage in STAGES:
             impl = get(stage, cfg[stage]["impl"])
-            extra = {"load": {"subset": subset, "docs": docs_hash},
+            extra = {"load": {"docs": docs_hash},     # the exact (doc_id, content_hash) set
                      "retrieve": {"questions": hashlib.sha256(",".join(qids).encode()).hexdigest()}}.get(stage)
             key = cache.stage_key(stage, cfg[stage], upstream, code_hashes[stage]["hash"], extra)
             hit = cache.is_cached(stage, key)
@@ -74,7 +82,9 @@ def run(config_path: str, overrides: list[str] | None = None, limit: int | None 
             t0 = time.time()
             if not hit:
                 tmp = cache.tmp_dir(stage, key)
-                ctx = StageContext(out=tmp, dirs=dirs, metas=metas, corpus=corpus, subset=subset, questions=questions)
+                ctx = StageContext(out=tmp, dirs=dirs, metas=metas, corpus=corpus, dataset=dataset, snapshot=snapshot,
+                                   subset=subset, questions=questions,
+                                   fingerprint=cache.stage_key(stage, cfg[stage], None, impl.store_version()))
                 params = impl.config_cls(**{k: v for k, v in cfg[stage].items() if k != "impl"})
                 stats = impl.fn(params, ctx) or {}
                 cache.commit(stage, key, tmp, {**stats, "stage": stage, "impl": impl.name, "key": key,

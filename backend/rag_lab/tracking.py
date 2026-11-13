@@ -30,7 +30,7 @@ def git_info(run_dir: Path) -> dict:
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs(
   run_id VARCHAR PRIMARY KEY, name VARCHAR, description VARCHAR, created_at TIMESTAMP, status VARCHAR,
-  subset VARCHAR, n_questions INTEGER, "limit" INTEGER, git_sha VARCHAR, git_dirty BOOLEAN,
+  dataset VARCHAR, snapshot INTEGER, subset VARCHAR, n_questions INTEGER, "limit" INTEGER, git_sha VARCHAR, git_dirty BOOLEAN,
   duration_s DOUBLE, cost_usd DOUBLE, judged BOOLEAN, error VARCHAR,
   config JSON, params JSON, overall JSON);
 CREATE TABLE IF NOT EXISTS metrics(run_id VARCHAR, category VARCHAR, metric VARCHAR, value DOUBLE);
@@ -68,8 +68,9 @@ def index_run(run_dir: Path, con=None) -> None:
     rid = run["run_id"]
     con.execute("DELETE FROM runs WHERE run_id=?", [rid])
     con.execute("DELETE FROM metrics WHERE run_id=?", [rid])
-    con.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
-        rid, run["name"], cfg.get("description", ""), run["created_at"], run["status"], cfg["data"]["subset"],
+    con.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        rid, run["name"], cfg.get("description", ""), run["created_at"], run["status"],
+        cfg["data"]["dataset"], cfg["data"]["snapshot"], cfg["data"]["subset"],
         run.get("n_questions"), run.get("limit"), run["git"]["sha"], run["git"]["dirty"], run.get("duration_s"),
         run.get("cost_usd"), metrics.get("judged", False), run.get("error"),
         json.dumps(cfg), json.dumps(flatten({k: v for k, v in cfg.items() if k not in ("name", "description")})),

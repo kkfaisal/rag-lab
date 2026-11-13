@@ -32,6 +32,13 @@ class Impl:
     fn: Callable
     config_cls: type[BaseModel]
 
+    def store_version(self) -> str:
+        """Identity of this implementation's per-item store (cache/store/). A module
+        can pin it with STORE_VERSION so harmless edits don't throw away hours of
+        embeddings; bump the constant when the stored items' meaning changes.
+        Without the constant, any edit to the module starts a fresh store."""
+        return str(getattr(sys.modules[self.fn.__module__], "STORE_VERSION", self.code_hash()))
+
     def code_hash(self) -> str:
         """Hash of the source of the module that defines this implementation.
         Whole module (not just the function) so edits to helper functions count too."""

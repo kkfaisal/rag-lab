@@ -1,10 +1,12 @@
 # Thread-aware chunking + BM25/vector hybrid (RRF) + cross-encoder reranker.
-# Shares load/embed settings with baseline where possible so the cache is reused.
+# Only Slack chunks differ from baseline; every other chunk text is identical, so its embedding is reused from the store.
 name: hybrid_rerank
 description: Slack thread-aware chunks, BM25+vector RRF over 50 candidates, MiniLM cross-encoder keeps top 10.
 
 data:
-  subset: dev
+  dataset: enterprise_rag_bench
+  subset: dev          # 100 questions (10 per category) + gold docs + 20k distractors
+  snapshot: latest
 
 load:
   impl: corpus
@@ -40,5 +42,5 @@ generate:
   context_chunks: 10
 
 evaluate:
-  impl: benchmark
+  impl: standard
   judge: auto

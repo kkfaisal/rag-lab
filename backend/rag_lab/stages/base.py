@@ -6,6 +6,8 @@ from pathlib import Path
 
 import duckdb
 
+from .. import paths
+
 
 @dataclass
 class StageContext:
@@ -13,8 +15,19 @@ class StageContext:
     dirs: dict[str, Path]                      # output dirs of upstream stages, by stage name
     metas: dict[str, dict]                     # their meta.json contents
     corpus: duckdb.DuckDBPyConnection          # read-only connection to data/corpus.duckdb
+    dataset: str
+    snapshot: int
     subset: str
+    fingerprint: str                           # hash of this stage's config + code, *without* upstream
     questions: list[dict] = field(default_factory=list)   # rows from the questions table
+
+    def store(self, stage: str) -> duckdb.DuckDBPyConnection:
+        """A per-item store shared by every run with the same stage config + code
+        (cache/store/<stage>/<fingerprint>.duckdb). Chunk and embed use it to cache
+        per document / per chunk text, so a grown dataset only processes the delta."""
+        d = paths.CACHE / "store" / stage
+        d.mkdir(parents=True, exist_ok=True)
+        return duckdb.connect(str(d / f"{self.fingerprint}.duckdb"))
 
     def log(self, msg: str) -> None:
         print(f"    {msg}", flush=True)

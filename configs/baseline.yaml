@@ -3,7 +3,9 @@ name: baseline
 description: Fixed 1200-char chunks, bge-small vectors, top-20 vector retrieval, Sonnet answers from top 10 chunks.
 
 data:
-  subset: dev
+  dataset: enterprise_rag_bench
+  subset: dev          # 100 questions (10 per category) + gold docs + 20k distractors
+  snapshot: latest
 
 load:
   impl: corpus
@@ -36,5 +38,5 @@ generate:
   context_chunks: 10
 
 evaluate:
-  impl: benchmark
+  impl: standard
   judge: auto

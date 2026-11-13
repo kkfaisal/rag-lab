@@ -1,7 +1,8 @@
-"""load: select the documents of the configured subset from the corpus DB."""
+"""load: select the documents of the configured dataset / snapshot / subset."""
 
 from pydantic import BaseModel
 
+from ..data import docs_sql
 from ..registry import register
 from .base import StageContext
 
@@ -13,17 +14,11 @@ class CorpusConfig(BaseModel):
 
 @register("load", "corpus", CorpusConfig)
 def load_corpus(cfg: CorpusConfig, ctx: StageContext) -> dict:
-    where = "WHERE d.doc_id IN (SELECT doc_id FROM subset_docs WHERE subset = $subset)"
-    params = {"subset": ctx.subset}
-    if cfg.sources:
-        where += " AND d.source IN (SELECT unnest($sources))"
-        params["sources"] = cfg.sources
+    params = {"ds": ctx.dataset, "snap": ctx.snapshot, "subset": ctx.subset, "sources": cfg.sources or []}
+    sql = f"""SELECT doc_id, source, title, text, content_hash FROM ({docs_sql()})
+              WHERE len($sources) = 0 OR list_contains($sources, source) ORDER BY doc_id"""
     out = ctx.out / "docs.parquet"
-    ctx.corpus.execute(
-        f"COPY (SELECT doc_id, source, title, text FROM docs d {where} ORDER BY doc_id) TO '{out}' (FORMAT parquet)",
-        params,
-    )
-    counts = ctx.corpus.execute(
-        f"SELECT source, count(*) FROM docs d {where} GROUP BY 1 ORDER BY 2 DESC", params).fetchall()
-    ctx.log(f"{sum(c for _, c in counts):,} docs")
-    return {"n_docs": sum(c for _, c in counts), "by_source": dict(counts)}
+    ctx.corpus.execute(f"COPY ({sql}) TO '{out}' (FORMAT parquet)", params)
+    counts = dict(ctx.corpus.execute(f"SELECT source, count(*) FROM '{out}' GROUP BY 1 ORDER BY 2 DESC").fetchall())
+    ctx.log(f"{sum(counts.values()):,} docs (dataset {ctx.dataset}, snapshot {ctx.snapshot}, subset {ctx.subset})")
+    return {"n_docs": sum(counts.values()), "by_source": counts}

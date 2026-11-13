@@ -1,0 +1,18 @@
+# Template for your own data. First: uv run rag-lab data add my_docs ./path/to/folder
+# Folder format: see backend/rag_lab/datasets/folder.py (questions.jsonl optional but needed to run).
+name: my_docs_hybrid
+description: Hybrid retrieval over a folder dataset.
+
+data:
+  dataset: my_docs
+  subset: all
+  snapshot: latest
+
+load: {impl: corpus}
+chunk: {impl: fixed, chunk_size: 1200, overlap: 150}
+embed: {impl: sentence_transformers, model: BAAI/bge-small-en-v1.5}
+index: {impl: duckdb, fts: true, vectors: true}
+retrieve: {impl: hybrid, top_k: 20}
+rerank: {impl: none}
+generate: {impl: llm, model: claude-sonnet-5-5, context_chunks: 10}
+evaluate: {impl: standard}      # judge auto-disables for non-benchmark datasets; recall metrics still run

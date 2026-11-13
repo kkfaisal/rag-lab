@@ -139,6 +139,10 @@ against the original gold set), because its correction flow needs the raw `gener
 setup deliberately skips (3.9 GB). Judge token costs happen inside the benchmark's code and are not
 tracked; generation costs are.
 
+`answer_recall` and `extra_docs` are, by construction, the judge's `document_recall` and
+`invalid_extra_docs` under `--no-correction` (checked: identical per question), so retrieval
+iterations get the benchmark's document metrics without paying for the judge.
+
 ### What a run folder holds
 
 ```

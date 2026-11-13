@@ -35,7 +35,10 @@ class SentenceTransformersConfig(BaseModel):
 @lru_cache(maxsize=2)
 def load_model(name: str, max_seq_length: int, device: str | None):
     from sentence_transformers import SentenceTransformer
-    m = SentenceTransformer(name, device=device)
+    try:   # use the local copy if we have one: no Hub round-trips, works offline
+        m = SentenceTransformer(name, device=device, local_files_only=True)
+    except Exception:
+        m = SentenceTransformer(name, device=device)
     m.max_seq_length = max_seq_length
     return m
 
@@ -52,7 +55,8 @@ def sentence_transformers(cfg: SentenceTransformersConfig, ctx: StageContext) ->
     batches that are saved as they finish — an interrupted job keeps its progress."""
     chunks = pq.read_table(ctx.dirs["chunk"] / "chunks.parquet", columns=["text_hash", "text"])
     store = ctx.store("embed")
-    dim = load_model(cfg.model, cfg.max_seq_length, cfg.device).get_sentence_embedding_dimension()
+    model = load_model(cfg.model, cfg.max_seq_length, cfg.device)
+    dim = (getattr(model, "get_embedding_dimension", None) or model.get_sentence_embedding_dimension)()
     store.execute(f"CREATE TABLE IF NOT EXISTS vecs(text_hash VARCHAR PRIMARY KEY, vec FLOAT[{dim}])")
     store.register("chunks", chunks.append_column("ord", pa.array(range(chunks.num_rows))))
     todo = store.execute("SELECT text_hash, any_value(text) FROM chunks ANTI JOIN vecs USING (text_hash) GROUP BY 1").fetchall()
@@ -64,7 +68,7 @@ def sentence_transformers(cfg: SentenceTransformersConfig, ctx: StageContext) ->
                                              "vec": pa.FixedSizeListArray.from_arrays(pa.array(vecs.ravel()), dim)}))
         store.execute("INSERT OR IGNORE INTO vecs SELECT * FROM new_vecs")
         ctx.log(f"saved {min(start + SAVE_EVERY, len(todo)):,}/{len(todo):,}")
-    vec_col = store.execute("SELECT v.vec FROM chunks c JOIN vecs v USING (text_hash) ORDER BY c.ord").to_arrow_table().column("vec")
+    vec_col = store.sql("SELECT v.vec FROM chunks c JOIN vecs v USING (text_hash) ORDER BY c.ord").to_arrow_table().column("vec")
     store.close()
     emb = vec_col.combine_chunks().values.to_numpy(zero_copy_only=False).reshape(-1, dim).astype(np.float32)
     np.save(ctx.out / "embeddings.npy", emb)

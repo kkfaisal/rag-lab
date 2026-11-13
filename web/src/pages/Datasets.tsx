@@ -3,13 +3,14 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recha
 import { get, type DatasetInfo } from '../api'
 
 export default function Datasets() {
-  const [ds, setDs] = useState<DatasetInfo[]>([])
+  const [ds, setDs] = useState<DatasetInfo[] | null>(null)
   useEffect(() => { get<DatasetInfo[]>('/api/datasets').then(setDs) }, [])
   return (
     <>
       <h1>Datasets</h1>
       <p className="muted small">Each <code>rag-lab data add</code> that changes something creates a snapshot. Runs record the snapshot they used.</p>
-      {ds.map(d => (
+      {ds === null && <p className="muted">Loading…</p>}
+      {ds?.map(d => (
         <div key={d.name} className="panel" style={{ marginTop: 16 }}>
           <h2 style={{ marginTop: 0 }}>{d.name} <span className="badge">{d.adapter}</span></h2>
           <p className="small muted">latest snapshot {d.latest_snapshot} · {Object.values(d.by_source).reduce((a, b) => a + b, 0).toLocaleString()} docs ·
@@ -34,7 +35,7 @@ export default function Datasets() {
             </table></div>
           </div>
         </div>))}
-      {ds.length === 0 && <p className="muted">No datasets yet.</p>}
+      {ds?.length === 0 && <p className="muted">No datasets yet.</p>}
     </>
   )
 }

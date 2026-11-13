@@ -29,7 +29,10 @@ class CrossEncoderConfig(BaseModel):
 @lru_cache(maxsize=1)
 def _load(name: str):
     from sentence_transformers import CrossEncoder
-    return CrossEncoder(name)
+    try:   # local copy first, as in embed.load_model
+        return CrossEncoder(name, local_files_only=True)
+    except Exception:
+        return CrossEncoder(name)
 
 
 @register("rerank", "cross_encoder", CrossEncoderConfig)

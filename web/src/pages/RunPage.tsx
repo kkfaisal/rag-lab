@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { fmt, get, heat, isPct, type QuestionRow, type RunDetail } from '../api'
 
+const display = (v: unknown) => (typeof v === 'object' ? JSON.stringify(v) : String(v))
 const STAGES = ['load', 'chunk', 'embed', 'index', 'retrieve', 'rerank', 'generate', 'evaluate']
 
 export default function RunPage() {
@@ -46,7 +47,7 @@ export default function RunPage() {
               <div className="impl">{String(cfg.impl)}</div>
               <dl>
                 {Object.entries(cfg).filter(([k]) => k !== 'impl' && k !== 'system_prompt').map(([k, v]) => (
-                  <Fragment key={k}><dt>{k}</dt><dd>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</dd></Fragment>
+                  <Fragment key={k}><dt>{k}</dt><dd title={display(v)}>{display(v).length > 40 ? display(v).slice(0, 38) + '…' : display(v)}</dd></Fragment>
                 ))}
               </dl>
               {log && <div className="small" style={{ marginTop: 8 }}>

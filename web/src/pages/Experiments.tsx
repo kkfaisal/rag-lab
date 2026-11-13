@@ -8,6 +8,7 @@ const METRICS = ['recall@10', 'recall@1', 'recall@5', 'recall@20', 'context_reca
 export default function Experiments() {
   const nav = useNavigate()
   const [indexes, setIndexes] = useState<IndexStatus[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [retrievers, setRetrievers] = useState<Graph[]>([])
   const [catalog, setCatalog] = useState<Catalog>()
   const [cells, setCells] = useState<MatrixCell[]>([])
@@ -27,7 +28,7 @@ export default function Experiments() {
     get<Graph[]>('/api/graphs/retriever').then(setRetrievers)
   }, [])
   useEffect(() => {
-    get<IndexStatus[]>('/api/indexes').then(setIndexes)
+    get<IndexStatus[]>('/api/indexes').then(i => { setIndexes(i); setLoaded(true) })
     get<MatrixCell[]>('/api/matrix').then(setCells)
   }, [busy])
 
@@ -68,7 +69,7 @@ export default function Experiments() {
               <span>{i.pipeline_name} / <b>{i.label}</b> <span className="muted small">{i.dataset} · {i.subset}</span></span>
               <span className={`badge ${i.state === 'built' ? 'ok' : i.state === 'invalid' ? 'failed' : ''}`}>{i.state === 'built' ? 'built' : i.state === 'invalid' ? 'invalid' : 'will be built'}</span>
             </label>))}
-          {indexes.length === 0 && <p className="muted small">No pipelines yet.</p>}
+          {indexes.length === 0 && <p className="muted small">{loaded ? 'No pipelines yet.' : 'Loading…'}</p>}
         </div>
         <div className="panel">
           <b>2. Retrieval setups</b> <span className="muted small">(from <Link to="/retrieval">Retrieval</Link>)</span>

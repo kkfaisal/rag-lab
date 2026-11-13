@@ -19,6 +19,7 @@ Tables
 import hashlib
 import json
 import random
+import time
 from pathlib import Path
 
 import duckdb
@@ -33,6 +34,7 @@ RELEASE_URL = "https://github.com/onyx-dot-app/EnterpriseRAG-Bench/releases/down
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS datasets(name VARCHAR PRIMARY KEY, adapter VARCHAR, created_at TIMESTAMP);
+ALTER TABLE datasets ADD COLUMN IF NOT EXISTS code VARCHAR;   -- extractor script, for the 'script' adapter
 CREATE TABLE IF NOT EXISTS snapshots(dataset VARCHAR, snapshot INTEGER, created_at TIMESTAMP,
   added INTEGER, changed INTEGER, deleted INTEGER, n_docs INTEGER, note VARCHAR);
 CREATE TABLE IF NOT EXISTS doc_contents(content_hash VARCHAR, title VARCHAR, text VARCHAR);
@@ -49,7 +51,14 @@ def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     paths.DATA.mkdir(parents=True, exist_ok=True)
     if read_only and not paths.CORPUS_DB.exists():
         raise SystemExit("No data/corpus.duckdb yet. See the README quickstart (rag-lab data download / load).")
-    con = duckdb.connect(str(paths.CORPUS_DB), read_only=read_only)
+    for attempt in range(40):      # one writer process at a time: wait briefly if the file is busy
+        try:
+            con = duckdb.connect(str(paths.CORPUS_DB), read_only=read_only)
+            break
+        except duckdb.IOException:
+            if attempt == 39:
+                raise
+            time.sleep(0.25)
     if not read_only:
         con.execute(SCHEMA)
     return con
@@ -90,7 +99,8 @@ def download(slices: list[str] | None = None) -> None:
 
 # ----------------------------------------------------------------------------- ingest
 
-def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: bool = False, note: str = "") -> int | None:
+def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: bool = False, note: str = "",
+           code: str | None = None) -> int | None:
     """Add docs from `path` to `dataset` and record a new snapshot.
 
     sync=False (default): upsert — new docs are added, changed docs get a new
@@ -100,13 +110,16 @@ def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: boo
     """
     path = Path(path)
     con = connect()
-    row = con.execute("SELECT adapter FROM datasets WHERE name=?", [dataset]).fetchone()
+    row = con.execute("SELECT adapter, code FROM datasets WHERE name=?", [dataset]).fetchone()
     adapter = adapter or (row[0] if row else (BENCH if dataset == BENCH else "folder"))
-    if row and row[0] != adapter:
-        raise SystemExit(f"Dataset {dataset!r} uses adapter {row[0]!r}, not {adapter!r}")
-    ds = get_adapter(adapter)
-    if not row:
-        con.execute("INSERT INTO datasets VALUES (?, ?, now())", [dataset, adapter])
+    if row and row[0] == BENCH and adapter != BENCH:
+        raise SystemExit(f"Dataset {dataset!r} is the benchmark dataset; its adapter can't be changed")
+    code = code if code is not None else (row[1] if row else None)
+    ds = get_adapter(adapter, code)
+    if row:
+        con.execute("UPDATE datasets SET adapter=?, code=? WHERE name=?", [adapter, code, dataset])
+    else:
+        con.execute("INSERT INTO datasets(name, adapter, created_at, code) VALUES (?, ?, now(), ?)", [dataset, adapter, code])
 
     # 1. Stage every incoming doc with its content hash.
     con.execute("""CREATE OR REPLACE TEMP TABLE staged(doc_id VARCHAR, source VARCHAR, path VARCHAR, title VARCHAR,
@@ -280,7 +293,9 @@ def build_subset(dataset: str = BENCH, name: str = "dev", per_category: int = 10
 
 def dataset_info(con) -> list[dict]:
     out = []
-    for name, adapter, created in con.execute("SELECT name, adapter, created_at FROM datasets ORDER BY name").fetchall():
+    cols = {r[0] for r in con.execute("DESCRIBE datasets").fetchall()}
+    code_col = "code" if "code" in cols else "NULL"
+    for name, adapter, created, code in con.execute(f"SELECT name, adapter, created_at, {code_col} FROM datasets ORDER BY name").fetchall():
         snaps = con.execute("""SELECT snapshot, created_at, added, changed, deleted, n_docs, note FROM snapshots
                                WHERE dataset=? ORDER BY snapshot""", [name]).fetchall()
         latest = snaps[-1][0] if snaps else 0
@@ -288,7 +303,7 @@ def dataset_info(con) -> list[dict]:
                                 {"ds": name, "snap": latest, "subset": "all"}).fetchall()
         subsets = con.execute("SELECT subset, count(*) FROM subset_questions WHERE dataset=? GROUP BY 1", [name]).fetchall()
         n_q = con.execute("SELECT count(*) FROM questions WHERE dataset=?", [name]).fetchone()[0]
-        out.append({"name": name, "adapter": adapter, "created_at": str(created), "latest_snapshot": latest,
+        out.append({"name": name, "adapter": adapter, "code": code, "created_at": str(created), "latest_snapshot": latest,
                     "n_questions": n_q, "by_source": dict(by_source), "subsets": dict(subsets),
                     "snapshots": [dict(zip(["snapshot", "created_at", "added", "changed", "deleted", "n_docs", "note"],
                                            [*s[:1], str(s[1]), *s[2:]])) for s in snaps]})

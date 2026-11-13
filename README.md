@@ -1,53 +1,93 @@
 # rag-lab
 
-An open-source workbench for iterating on **real RAG pipelines** and seeing exactly what each change did.
+An open-source, end-to-end **playground for RAG pipelines**: bring data, build indexing pipelines on a
+node canvas, design retrieval setups, run every combination against a question set, and see exactly
+what each change did.
 
-You describe a pipeline in a small YAML file, run it from the CLI, and every run is recorded with its
-full resolved config, the code version (git SHA + diff, plus a hash of every stage implementation),
-the dataset snapshot it saw, per-stage timings, token usage and cost, the answers, and the evaluation.
-A web UI lets you browse runs, filter by any config parameter, compare two runs question by question,
-and drill into a single question to see which gold documents were retrieved, missed, or cited.
+The workflow, all in the browser:
+
+1. **Datasets** — upload files (or a zip), optionally write a Python extractor script, add a
+   questions file. Every ingest is an incremental, versioned snapshot.
+2. **Pipelines** — a node canvas, like an ETL tool: `source → chunk → embed → index`. Branch it to try
+   several strategies side by side. Nodes are built-ins with settings forms, or a **Python script
+   node** you edit in the browser (with a live preview on a real document). Every index node's
+   result is saved and reusable.
+3. **Retrieval** — a second canvas: `retrieve → rerank → generate`, again with built-ins or your own
+   script, and a "try a query" box against any built index.
+4. **Experiments** — tick indexes × retrieval setups, press Run, watch the jobs, and compare the
+   results in a matrix. Drill down to a two-run diff (questions fixed/broken) and a per-question
+   page showing gold vs retrieved documents and the answer.
+
+Every run is recorded with its full resolved config (scripts included), code version, dataset
+snapshot, per-stage timings, token usage and cost. Everything the UI does is also available from
+the CLI with YAML configs.
 
 It ships with an adapter for [EnterpriseRAG-Bench](https://github.com/onyx-dot-app/EnterpriseRAG-Bench)
 (MIT): ~500k synthetic company documents (Slack, Gmail, Linear, Google Drive, HubSpot, Fireflies,
 GitHub, Jira, Confluence) with deliberate noise, and 500 questions across 10 categories, scored by
-the benchmark's own LLM judge. You can also bring your own folder of documents.
+the benchmark's own LLM judge. Other benchmarks and your own data use the same tool: retrieval
+metrics come from gold document ids, and a built-in generic Claude judge scores answers against
+gold answers.
+
+> **Local tool.** Script nodes and extractor scripts run as ordinary Python on your machine with
+> your privileges. `rag-lab serve` binds to 127.0.0.1; don't expose it to a network you don't trust.
 
 ## Quickstart
 
-Requirements: [uv](https://docs.astral.sh/uv/), Node 20+, git, ~6 GB of disk for the full corpus.
+Requirements: [uv](https://docs.astral.sh/uv/), Node 20+, git.
 
 ```bash
 git clone <this repo> rag-lab && cd rag-lab
 uv sync                                   # Python deps (Python 3.12 is pinned)
-cp .env.example .env                      # then put your ANTHROPIC_API_KEY in .env (optional, see below)
-
-uv run rag-lab data download              # questions.jsonl + all_documents.zip (1.26 GB) -> data/raw/
-uv run rag-lab data load                  # ingest into data/corpus.duckdb (~1 min)
-uv run rag-lab data subset                # dev subset: 100 questions (10/category) + gold docs + 20k distractors
-uv run rag-lab bench setup                # clone the benchmark's judge into .bench/ with its own venv
-
-uv run rag-lab run configs/baseline.yaml --limit 20
-
+cp .env.example .env                      # optional: put your ANTHROPIC_API_KEY in .env
 cd web && npm install && npm run build && cd ..
 uv run rag-lab serve                      # http://127.0.0.1:8000
 ```
 
-The first run embeds ~105k chunks with a local model (about 9 minutes on an Apple-silicon laptop);
-later runs reuse them from the cache.
-
-**Without an API key** you can still do everything retrieval-related for free:
+That is enough to start with your own data: open **Datasets**, upload files, ingest, then build a
+pipeline. To work with EnterpriseRAG-Bench (~6 GB of disk), load it first:
 
 ```bash
-uv run rag-lab run configs/baseline.yaml --limit 20 --set generate.impl=none
+uv run rag-lab data download              # questions.jsonl + all_documents.zip (1.26 GB) -> data/raw/
+uv run rag-lab data load                  # ingest into data/corpus.duckdb (~1 min)
+uv run rag-lab data subset                # dev subset: 100 questions (10/category) + gold docs + 20k distractors
+uv run rag-lab bench setup                # clone the benchmark's judge into .bench/ with its own venv
 ```
 
-This skips the LLM and the judge and reports recall@k, context recall and answer-doc recall.
+On first start the UI seeds an example pipeline (one source, two chunkers, two indexes) and three
+retrieval setups. On **Experiments**, tick both indexes and a couple of setups and press Run.
+The first build embeds ~105k chunks with a local model (about 9 minutes on an Apple-silicon
+laptop); after that, chunks and embeddings are reused.
 
-**With `ANTHROPIC_API_KEY` set**, `generate` answers with Claude (`claude-sonnet-5-5` by default) and
-`evaluate` runs the benchmark judge (`claude-sonnet-5-5`, with `claude-haiku-5-5` for its cheap steps).
+**Without an API key** everything retrieval-related works and is free (recall@k, context recall,
+answer-doc recall). **With `ANTHROPIC_API_KEY`**, generate nodes answer with Claude
+(`claude-sonnet-5-5` by default) and answers are judged: by the benchmark's own judge for
+EnterpriseRAG-Bench, by the generic judge elsewhere.
+
+The same from the CLI:
+
+```bash
+uv run rag-lab run configs/baseline.yaml --limit 20
+uv run rag-lab run configs/baseline.yaml --limit 20 --set generate.impl=none    # no LLM
+```
 
 For UI development, run `uv run rag-lab serve` and `cd web && npm run dev` (Vite proxies `/api`).
+
+### Script nodes
+
+```python
+def chunk(doc):                      # chunk node: doc has doc_id, source, title, text, body
+    return [p for p in doc["body"].split("\n\n") if p.strip()]
+
+def retrieve(question, search, top_k):   # retrieve node: search.bm25(q, k) / search.vector(q, k)
+    return search.bm25(question, top_k)
+
+def extract(path):                   # dataset extractor: path is the dataset's upload folder
+    yield {"doc_id": "a", "text": "...", "title": "...", "source": "..."}
+```
+
+The script text is part of the node's settings, so it is hashed for caching (edit the script and
+only that node and what follows it re-run) and saved in every run's `config.json`.
 
 ## Concepts
 
@@ -60,17 +100,20 @@ load → chunk → embed → index → retrieve → rerank → generate → eval
 | stage    | implementations (v1)                               | output                         |
 |----------|----------------------------------------------------|--------------------------------|
 | load     | `corpus` (dataset + snapshot + subset)             | docs.parquet                   |
-| chunk    | `fixed`, `slack_aware` (whole messages, thread root repeated) | chunks.parquet      |
+| chunk    | `fixed`, `slack_aware` (whole messages, thread root repeated), `python` (your script) | chunks.parquet |
 | embed    | `sentence_transformers` (default `BAAI/bge-small-en-v1.5`), `none` | embeddings.npy |
 | index    | `duckdb` (BM25 via DuckDB FTS; vectors searched with numpy) | index.duckdb          |
-| retrieve | `bm25`, `vector`, `hybrid` (Reciprocal Rank Fusion) | retrieval.jsonl               |
+| retrieve | `bm25`, `vector`, `hybrid` (Reciprocal Rank Fusion), `python` (your script) | retrieval.jsonl |
 | rerank   | `none`, `cross_encoder`                            | reranked.jsonl                 |
 | generate | `llm` (provider interface; `anthropic` first), `none` | answers.jsonl, generations.jsonl |
-| evaluate | `standard` (free recall metrics + optional benchmark judge) | metrics.json, per_question.jsonl |
+| evaluate | `standard` (free recall metrics + optional LLM judge) | metrics.json, per_question.jsonl |
 
 `uv run rag-lab impls` lists every implementation and its parameters.
 
 ### Configs
+
+A canvas path (one index node + one retrieval setup) compiles to exactly this format, so the
+engine is the same for the UI and the CLI:
 
 ```yaml
 name: baseline
@@ -133,10 +176,12 @@ Computed for free on every run (no LLM):
 - `answer_recall` / `extra_docs` — gold docs among, and non-gold docs in, the answer's `document_ids`
 - `abstained` — share of questions the model declined to answer
 
-From the benchmark's judge (when it runs): `correctness`, `completeness`, `judge_doc_recall`,
-`invalid_extra_docs`, per question and per category. The judge runs with `--no-correction` (scores
+From a judge (when answers and an API key exist): `correctness` and `completeness`, per question
+and per category. EnterpriseRAG-Bench uses the benchmark's own judge, which adds `judge_doc_recall`
+and `invalid_extra_docs`; other datasets use the generic judge (one Claude call per question,
+comparing the answer with the gold answer; its cost is tracked). The benchmark judge runs with `--no-correction` (scores
 against the original gold set), because its correction flow needs the raw `generated_data/` the
-setup deliberately skips (3.9 GB). Judge token costs happen inside the benchmark's code and are not
+setup deliberately skips (3.9 GB). Its token costs happen inside the benchmark's code and are not
 tracked; generation costs are.
 
 `answer_recall` and `extra_docs` are, by construction, the judge's `document_recall` and
@@ -164,7 +209,10 @@ runs/<run_id>/
 ```
 backend/rag_lab/
   cli.py          typer CLI
-  datasets/       dataset adapters (enterprise_rag_bench, folder)
+  datasets/       dataset adapters (enterprise_rag_bench, folder, script)
+  scripting.py    loading user-written script nodes + their templates
+  workspace.py    canvas graphs (workspace/*.json) -> runnable configs
+  jobs.py         background job queue; worker.py runs one job
   data.py         versioned document store, snapshots, subsets
   config.py       YAML -> validated, fully-resolved config
   registry.py     stage implementation registry
@@ -174,11 +222,12 @@ backend/rag_lab/
   bench.py        benchmark judge setup + subprocess call
   pipeline.py     runs stages, records the run
   tracking.py     run folders -> runs/index.duckdb
-  api.py          read-only FastAPI
-web/              Vite + React + TypeScript + Recharts UI
+  api.py          FastAPI backend for the UI
+web/              Vite + React + TypeScript UI (React Flow canvas, CodeMirror, Recharts)
 ```
 
-The UI is read-only in v1: runs are launched from the CLI.
+Anything slow or that writes to DuckDB (ingest, index builds, experiments) runs as a background
+job: one at a time, each in its own subprocess, with a log you can open in the UI.
 
 ## Adding an implementation
 

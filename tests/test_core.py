@@ -60,3 +60,72 @@ def test_incremental_ingest(tmp_path):
     assert at(1) == ["a.txt", "b.md"] and at(2) == ["a.txt", "b.md", "c.txt"] and at(3) == ["b.md", "c.txt"]
     old = con.execute(f"SELECT text FROM ({data.docs_sql()}) WHERE doc_id='b.md'", {"ds": "t", "snap": 1, "subset": "all"}).fetchone()[0]
     assert old.endswith("second doc")                                # old snapshot still reconstructable
+
+
+# ---- playground: canvas graphs, script nodes, script datasets
+
+def _pipeline():
+    return {"id": "p", "name": "P", "nodes": [
+        {"id": "s", "stage": "source", "impl": "dataset", "params": {"dataset": "t", "subset": "all"}, "position": {"x": 0, "y": 0}},
+        {"id": "c1", "stage": "chunk", "impl": "fixed", "params": {"chunk_size": 500}, "position": {"x": 0, "y": 0}},
+        {"id": "c2", "stage": "chunk", "impl": "python", "params": {}, "position": {"x": 0, "y": 0}},
+        {"id": "e1", "stage": "embed", "impl": "sentence_transformers", "params": {}, "position": {"x": 0, "y": 0}},
+        {"id": "i1", "stage": "index", "impl": "duckdb", "params": {}, "label": "A", "position": {"x": 0, "y": 0}},
+        {"id": "i2", "stage": "index", "impl": "duckdb", "params": {"vectors": False}, "label": "B", "position": {"x": 0, "y": 0}},
+        {"id": "i3", "stage": "index", "impl": "duckdb", "params": {}, "position": {"x": 0, "y": 0}}],
+        "edges": [{"source": "s", "target": "c1"}, {"source": "c1", "target": "e1"}, {"source": "e1", "target": "i1"},
+                  {"source": "s", "target": "c2"}, {"source": "c2", "target": "i2"}]}
+
+
+def test_branching_pipeline_compiles_each_index_path():
+    import pytest
+    from rag_lab import workspace as w
+    p = _pipeline()
+    a, b = w.compile_index(p, "i1"), w.compile_index(p, "i2")
+    assert a["chunk"] == {"impl": "fixed", "chunk_size": 500} and a["embed"]["impl"] == "sentence_transformers"
+    assert b["chunk"]["impl"] == "python" and b["embed"] == {"impl": "none"}     # chunk -> index: BM25 only
+    assert a["data"] == b["data"] == {"dataset": "t", "subset": "all", "snapshot": "latest"}
+    with pytest.raises(w.GraphError):
+        w.compile_index(p, "i3")                                                  # not connected to a source
+    r = {"id": "r", "name": "R", "nodes": [{"id": "x", "stage": "retrieve", "impl": "bm25", "params": {"top_k": 5}}], "edges": []}
+    cfg, meta = w.experiment_config(p, "i2", r, judge=False)
+    assert resolve(cfg)["rerank"] == {"impl": "none"} and meta["retriever_id"] == "r"
+    edited = {**p, "nodes": [{**n, "params": {"chunk_size": 900}} if n["id"] == "c1" else n for n in p["nodes"]]}
+    assert w.build_config(edited, "i1")[1]["spec_hash"] != w.build_config(p, "i1")[1]["spec_hash"]   # edit -> stale
+    assert w.build_config(edited, "i2")[1]["spec_hash"] == w.build_config(p, "i2")[1]["spec_hash"]   # other branch untouched
+
+
+def test_python_chunk_script_and_errors():
+    import pytest
+    from rag_lab.scripting import ScriptError
+    from rag_lab.stages import chunk
+    doc = {"doc_id": "d", "source": "x", "title": "T", "text": "T\nalpha\n\nbeta"}
+    cfg = chunk.PythonChunkConfig(code="def chunk(doc):\n    return [p.upper() for p in doc['body'].split('\\n\\n')]")
+    assert chunk.preview("python", cfg, doc) == ["ALPHA", "BETA"]
+    with pytest.raises(ScriptError):
+        chunk.preview("python", chunk.PythonChunkConfig(code="def chunk(doc):\n    return 'not a list'"), doc)
+    with pytest.raises(ScriptError):
+        chunk.preview("python", chunk.PythonChunkConfig(code="x = 1"), doc)
+
+
+def test_script_dataset_end_to_end_bm25(tmp_path):
+    """Extractor script -> ingest -> script chunker -> BM25 index -> experiment, no models needed."""
+    import json
+    from rag_lab import pipeline
+    (tmp_path / "rows.csv").write_text("id,body\na,Refunds are issued within 14 days\nb,Orders ship from the Leeds warehouse\n")
+    (tmp_path / "questions.jsonl").write_text(json.dumps({"question_id": "q1", "question": "where do orders ship from", "expected_doc_ids": ["b"]}) + "\n")
+    code = ("import csv, json\nfrom pathlib import Path\n"
+            "def extract(path):\n    for r in csv.DictReader(open(Path(path) / 'rows.csv')):\n        yield {'doc_id': r['id'], 'text': r['body']}\n"
+            "def questions(path):\n    for line in open(Path(path) / 'questions.jsonl'):\n        yield json.loads(line)\n")
+    assert data.ingest("csv", tmp_path, adapter="script", code=code) == 1
+    cfg = {"name": "csv-test", "data": {"dataset": "csv", "subset": "all"}, "load": {"impl": "corpus"},
+           "chunk": {"impl": "python", "code": "def chunk(doc):\n    return [doc['text']]"}, "embed": {"impl": "none"},
+           "index": {"impl": "duckdb", "vectors": False}, "retrieve": {"impl": "bm25", "top_k": 1},
+           "generate": {"impl": "none"}, "evaluate": {"impl": "standard", "judge": "auto"}}
+    build_id = pipeline.run_config({k: cfg[k] for k in ["name", "data", "load", "chunk", "embed", "index"]}, stop_after="index", meta={"node_id": "n"})
+    run_id = pipeline.run_config(cfg)
+    from rag_lab import paths
+    assert json.loads((paths.RUNS / build_id / "run.json").read_text())["kind"] == "build"
+    stages = json.loads((paths.RUNS / run_id / "stages.json").read_text())
+    assert [s["cached"] for s in stages[:4]] == [True] * 4                       # the experiment reused the build
+    assert json.loads((paths.RUNS / run_id / "metrics.json").read_text())["overall"]["recall@1"] == 100.0

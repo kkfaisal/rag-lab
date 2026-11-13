@@ -45,8 +45,9 @@ def apply_overrides(raw: dict, overrides: list[str]) -> dict:
     return raw
 
 
-def resolve(raw: dict) -> dict:
-    """Validate every stage block and fill in defaults."""
+def resolve(raw: dict, stages: list[str] = STAGES) -> dict:
+    """Validate every stage block and fill in defaults. `stages` lets an index
+    build resolve only load..index."""
     out = {
         "name": raw.get("name", "unnamed"),
         "description": raw.get("description", ""),
@@ -55,7 +56,7 @@ def resolve(raw: dict) -> dict:
     unknown = set(raw) - {"name", "description", "data", *STAGES}
     if unknown:
         raise SystemExit(f"Unknown top-level config keys: {sorted(unknown)}")
-    for stage in STAGES:
+    for stage in stages:
         block = dict(raw.get(stage) or {})
         impl_name = block.pop("impl", "none" if stage == "rerank" else None)
         if impl_name is None:

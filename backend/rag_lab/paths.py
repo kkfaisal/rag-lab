@@ -17,3 +17,7 @@ RUNS_INDEX = RUNS / "index.duckdb"      # queryable index over all run folders
 
 BENCH_DIR = ROOT / ".bench" / "EnterpriseRAG-Bench"   # benchmark checkout used for judging
 WEB_DIST = ROOT / "web" / "dist"
+
+WORKSPACE = ROOT / "workspace"          # canvas definitions: workspace/pipelines/*.json, workspace/retrievers/*.json
+UPLOADS = DATA / "uploads"              # files uploaded through the UI, one folder per dataset
+JOBS = RUNS / "jobs"                    # background job records + logs

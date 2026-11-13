@@ -52,7 +52,7 @@ class LLMProvider:
         raise NotImplementedError
 
 
-def get_provider(name: str, **kwargs) -> LLMProvider:
+def get_provider(name: str = "anthropic", **kwargs) -> LLMProvider:
     if name == "anthropic":
         from .anthropic import AnthropicProvider
         return AnthropicProvider(**kwargs)

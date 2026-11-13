@@ -30,7 +30,7 @@ def git_info(run_dir: Path) -> dict:
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs(
   run_id VARCHAR PRIMARY KEY, name VARCHAR, description VARCHAR, created_at TIMESTAMP, status VARCHAR,
-  dataset VARCHAR, snapshot INTEGER, subset VARCHAR, n_questions INTEGER, "limit" INTEGER, git_sha VARCHAR, git_dirty BOOLEAN,
+  kind VARCHAR, meta JSON, dataset VARCHAR, snapshot INTEGER, subset VARCHAR, n_questions INTEGER, "limit" INTEGER, git_sha VARCHAR, git_dirty BOOLEAN,
   duration_s DOUBLE, cost_usd DOUBLE, judged BOOLEAN, error VARCHAR,
   config JSON, params JSON, overall JSON);
 CREATE TABLE IF NOT EXISTS metrics(run_id VARCHAR, category VARCHAR, metric VARCHAR, value DOUBLE);
@@ -54,12 +54,24 @@ def _connect(read_only=False, retries=20):
 
 
 def connect_read():
-    if not paths.RUNS_INDEX.exists():
-        _connect().close()
+    ensure_index()
     return _connect(read_only=True)
 
 
+def ensure_index() -> None:
+    """Create the index, or rebuild it from the run folders if it predates the current schema."""
+    if not paths.RUNS_INDEX.exists():
+        _connect().close()
+        return
+    con = _connect(read_only=True)
+    cols = {r[0] for r in con.execute("DESCRIBE runs").fetchall()}
+    con.close()
+    if "kind" not in cols:
+        reindex()
+
+
 def index_run(run_dir: Path, con=None) -> None:
+    ensure_index() if con is None else None
     run = json.loads((run_dir / "run.json").read_text())
     cfg = json.loads((run_dir / "config.json").read_text())
     metrics = json.loads((run_dir / "metrics.json").read_text()) if (run_dir / "metrics.json").exists() else {}
@@ -68,11 +80,12 @@ def index_run(run_dir: Path, con=None) -> None:
     rid = run["run_id"]
     con.execute("DELETE FROM runs WHERE run_id=?", [rid])
     con.execute("DELETE FROM metrics WHERE run_id=?", [rid])
-    con.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+    con.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
         rid, run["name"], cfg.get("description", ""), run["created_at"], run["status"],
+        run.get("kind", "experiment"), json.dumps(run.get("meta") or {}),
         cfg["data"]["dataset"], cfg["data"]["snapshot"], cfg["data"]["subset"],
         run.get("n_questions"), run.get("limit"), run["git"]["sha"], run["git"]["dirty"], run.get("duration_s"),
-        run.get("cost_usd"), metrics.get("judged", False), run.get("error"),
+        run.get("cost_usd"), bool(metrics.get("judged", False)), run.get("error"),
         json.dumps(cfg), json.dumps(flatten({k: v for k, v in cfg.items() if k not in ("name", "description")})),
         json.dumps(metrics.get("overall", {}))])
     rows = [(rid, "_overall", m, v) for m, v in metrics.get("overall", {}).items() if isinstance(v, (int, float))]
@@ -89,7 +102,7 @@ def reindex() -> int:
     con = _connect()
     n = 0
     for d in sorted(paths.RUNS.iterdir()):
-        if (d / "run.json").exists():
+        if (d / "run.json").exists() and (d / "config.json").exists():
             index_run(d, con)
             n += 1
     con.close()

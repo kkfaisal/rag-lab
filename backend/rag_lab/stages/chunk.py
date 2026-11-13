@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 
 from ..registry import register
+from ..scripting import CHUNK_TEMPLATE, ScriptError, load_functions
 from .base import StageContext
 
 
@@ -123,16 +124,52 @@ def _write_chunks(ctx: StageContext, cfg: FixedConfig, split_doc) -> dict:
             "docs_reused": docs.num_rows - n_new_docs, "avg_chars": round(avg or 0), "max_chars": mx}
 
 
+class PythonChunkConfig(BaseModel):
+    model_config = {"extra": "forbid"}
+    code: str = CHUNK_TEMPLATE      # must define chunk(doc) -> list[str]
+    prepend_title: bool = False     # your script decides what goes into each chunk
+    title_max_chars: int = 200
+
+
+def make_splitter(impl: str, cfg):
+    """(doc, body) -> list[str] for a chunk implementation. Shared by the stage
+    functions below and by the UI's "preview on a sample document"."""
+    if impl == "fixed":
+        return lambda d, body: split_fixed(body, cfg.chunk_size, cfg.overlap)
+    if impl == "slack_aware":   # thread-aware for Slack, fixed-size for every other source
+        return lambda d, body: (split_slack_thread(body, cfg.chunk_size, cfg.overlap, cfg.root_chars)
+                                if d["source"] == "slack" else split_fixed(body, cfg.chunk_size, cfg.overlap))
+    if impl == "python":
+        fn = load_functions(cfg.code, "chunk")["chunk"]
+
+        def split(d, body):
+            out = fn({**d, "body": body})
+            if not isinstance(out, list) or not all(isinstance(c, str) for c in out):
+                raise ScriptError("chunk(doc) must return a list of strings")
+            return [c for c in out if c.strip()]
+        return split
+    raise ValueError(impl)
+
+
+def preview(impl: str, cfg, doc: dict) -> list[str]:
+    """Chunks of a single document, exactly as the stage would produce them."""
+    title = doc["title"] or ""
+    body = doc["text"][len(title):].lstrip("\n") if doc["text"].startswith(title) else doc["text"]
+    title = title[: cfg.title_max_chars]
+    return [f"{title}\n{p}" if cfg.prepend_title and title else p for p in make_splitter(impl, cfg)(doc, body)]
+
+
 @register("chunk", "fixed", FixedConfig)
 def fixed(cfg: FixedConfig, ctx: StageContext) -> dict:
-    return _write_chunks(ctx, cfg, lambda d, body: split_fixed(body, cfg.chunk_size, cfg.overlap))
+    return _write_chunks(ctx, cfg, make_splitter("fixed", cfg))
 
 
 @register("chunk", "slack_aware", SlackAwareConfig)
 def slack_aware(cfg: SlackAwareConfig, ctx: StageContext) -> dict:
-    """Thread-aware splitting for Slack, fixed-size for every other source."""
-    def split(d, body):
-        if d["source"] == "slack":
-            return split_slack_thread(body, cfg.chunk_size, cfg.overlap, cfg.root_chars)
-        return split_fixed(body, cfg.chunk_size, cfg.overlap)
-    return _write_chunks(ctx, cfg, split)
+    return _write_chunks(ctx, cfg, make_splitter("slack_aware", cfg))
+
+
+@register("chunk", "python", PythonChunkConfig)
+def python_chunker(cfg: PythonChunkConfig, ctx: StageContext) -> dict:
+    """Your own chunk(doc) function, edited in the UI."""
+    return _write_chunks(ctx, cfg, make_splitter("python", cfg))

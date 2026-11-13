@@ -43,7 +43,7 @@ def register_dataset(name: str):
     return deco
 
 
-def get_adapter(name: str) -> Dataset:
+def get_adapter(name: str, code: str | None = None) -> Dataset:
     if name not in ADAPTERS:
         raise SystemExit(f"Unknown dataset adapter {name!r}. Available: {sorted(ADAPTERS)}")
-    return ADAPTERS[name]()
+    return ADAPTERS[name](code) if name == "script" else ADAPTERS[name]()

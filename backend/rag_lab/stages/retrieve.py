@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 
 from ..registry import register
+from ..scripting import RETRIEVE_TEMPLATE, ScriptError, load_functions
 from .base import StageContext, write_jsonl
 from .embed import encode
 
@@ -26,70 +27,101 @@ class HybridConfig(TopKConfig):
     vector_weight: float = 1.0
 
 
-def _chunk_doc_ids(ctx: StageContext) -> tuple[list[str], list[str]]:
-    t = pq.read_table(ctx.dirs["chunk"] / "chunks.parquet", columns=["chunk_id", "doc_id"])
-    return t.column("chunk_id").to_pylist(), t.column("doc_id").to_pylist()
+class PythonRetrieveConfig(TopKConfig):
+    code: str = RETRIEVE_TEMPLATE     # must define retrieve(question, search, top_k)
 
 
-def bm25_search(ctx: StageContext, k: int) -> dict[str, list[dict]]:
-    if not ctx.metas["index"].get("fts"):
-        raise SystemExit("bm25 retrieval needs index.fts=true")
-    con = duckdb.connect(str(ctx.dirs["index"] / "index.duckdb"), read_only=True)
-    con.execute("LOAD fts")
-    out = {}
+class Search:
+    """The two primitive searches over an index. Built-in retrievers and
+    script nodes are both written against this."""
+
+    def __init__(self, ctx: StageContext):
+        self.ctx = ctx
+        self._con = self._emb = self._ids = None
+
+    def bm25(self, query: str, k: int) -> list[dict]:
+        if not self.ctx.metas["index"].get("fts"):
+            raise SystemExit("BM25 search needs an index built with fts=true")
+        if self._con is None:
+            self._con = duckdb.connect(str(self.ctx.dirs["index"] / "index.duckdb"), read_only=True)
+            self._con.execute("LOAD fts")
+        rows = self._con.execute("""
+            SELECT chunk_id, doc_id, score, text FROM (
+              SELECT chunk_id, doc_id, text, fts_main_chunks.match_bm25(chunk_id, ?) AS score FROM chunks
+            ) WHERE score IS NOT NULL ORDER BY score DESC LIMIT ?""", [query, k]).fetchall()
+        return [{"chunk_id": c, "doc_id": d, "score": float(s), "text": t} for c, d, s, t in rows]
+
+    def vector(self, query: str, k: int) -> list[dict]:
+        meta = self.ctx.metas["embed"]
+        if not meta.get("n"):
+            raise SystemExit("Vector search needs embeddings (the pipeline's embed node must not be 'none')")
+        if self._emb is None:
+            self._emb = np.load(self.ctx.dirs["embed"] / "embeddings.npy")
+            t = pq.read_table(self.ctx.dirs["chunk"] / "chunks.parquet", columns=["chunk_id", "doc_id", "text"])
+            self._ids = (t.column("chunk_id").to_pylist(), t.column("doc_id").to_pylist(), t.column("text"))
+        qv = encode(meta["model"], [meta["query_prefix"] + query], meta["max_seq_length"])[0]
+        scores = self._emb @ qv                              # cosine similarity (vectors are normalised)
+        k = min(k, len(scores))
+        top = np.argpartition(-scores, k - 1)[:k]
+        top = top[np.argsort(-scores[top])]
+        chunk_ids, doc_ids, texts = self._ids
+        return [{"chunk_id": chunk_ids[i], "doc_id": doc_ids[i], "score": float(scores[i]), "text": texts[int(i)].as_py()}
+                for i in top]
+
+    def close(self) -> None:
+        if self._con is not None:
+            self._con.close()
+
+
+def rrf(result_lists: list[tuple[float, list[dict]]], rrf_k: int, top_k: int) -> list[dict]:
+    """Reciprocal Rank Fusion: merge ranked lists using ranks only, so the
+    retrievers' incomparable score scales don't matter."""
+    fused, hit_of = {}, {}
+    for weight, hits in result_lists:
+        for rank, h in enumerate(hits):
+            fused[h["chunk_id"]] = fused.get(h["chunk_id"], 0.0) + weight / (rrf_k + rank + 1)
+            hit_of[h["chunk_id"]] = h
+    best = sorted(fused.items(), key=lambda kv: -kv[1])[:top_k]
+    return [{**hit_of[c], "score": s} for c, s in best]
+
+
+def _run(ctx: StageContext, per_question) -> dict:
+    search = Search(ctx)
+    rows = []
     for q in ctx.questions:
-        rows = con.execute("""
-            SELECT chunk_id, doc_id, score FROM (
-              SELECT chunk_id, doc_id, fts_main_chunks.match_bm25(chunk_id, ?) AS score FROM chunks
-            ) WHERE score IS NOT NULL ORDER BY score DESC LIMIT ?""", [q["question"], k]).fetchall()
-        out[q["question_id"]] = [{"chunk_id": c, "doc_id": d, "score": float(s)} for c, d, s in rows]
-    con.close()
-    return out
-
-
-def vector_search(ctx: StageContext, k: int) -> dict[str, list[dict]]:
-    meta = ctx.metas["embed"]
-    if not meta.get("n"):
-        raise SystemExit("vector retrieval needs embeddings (embed.impl != none)")
-    emb = np.load(ctx.dirs["embed"] / "embeddings.npy")
-    chunk_ids, doc_ids = _chunk_doc_ids(ctx)
-    qv = encode(meta["model"], [meta["query_prefix"] + q["question"] for q in ctx.questions], meta["max_seq_length"])
-    scores = qv @ emb.T                                  # cosine similarity (vectors are normalised)
-    out = {}
-    for qi, q in enumerate(ctx.questions):
-        top = np.argpartition(-scores[qi], min(k, len(chunk_ids) - 1))[:k]
-        top = top[np.argsort(-scores[qi][top])]
-        out[q["question_id"]] = [{"chunk_id": chunk_ids[i], "doc_id": doc_ids[i], "score": float(scores[qi][i])} for i in top]
-    return out
+        hits = per_question(q["question"], search)
+        rows.append({"question_id": q["question_id"],
+                     "chunks": [{"chunk_id": h["chunk_id"], "doc_id": h["doc_id"], "score": float(h.get("score", 0.0))} for h in hits]})
+    search.close()
+    write_jsonl(ctx.out / "retrieval.jsonl", rows)
+    return {"n_questions": len(rows)}
 
 
 @register("retrieve", "bm25", TopKConfig)
 def bm25(cfg: TopKConfig, ctx: StageContext) -> dict:
-    res = bm25_search(ctx, cfg.top_k)
-    write_jsonl(ctx.out / "retrieval.jsonl", [{"question_id": q, "chunks": c} for q, c in res.items()])
-    return {"n_questions": len(res)}
+    return _run(ctx, lambda q, s: s.bm25(q, cfg.top_k))
 
 
 @register("retrieve", "vector", TopKConfig)
 def vector(cfg: TopKConfig, ctx: StageContext) -> dict:
-    res = vector_search(ctx, cfg.top_k)
-    write_jsonl(ctx.out / "retrieval.jsonl", [{"question_id": q, "chunks": c} for q, c in res.items()])
-    return {"n_questions": len(res)}
+    return _run(ctx, lambda q, s: s.vector(q, cfg.top_k))
 
 
 @register("retrieve", "hybrid", HybridConfig)
 def hybrid(cfg: HybridConfig, ctx: StageContext) -> dict:
-    """BM25 + vector, merged with Reciprocal Rank Fusion. RRF only looks at ranks,
-    so the two retrievers' incomparable score scales don't matter."""
-    lexical, dense = bm25_search(ctx, cfg.candidates), vector_search(ctx, cfg.candidates)
-    rows = []
-    for q in ctx.questions:
-        qid, fused, doc_of = q["question_id"], {}, {}
-        for weight, hits in [(cfg.bm25_weight, lexical[qid]), (cfg.vector_weight, dense[qid])]:
-            for rank, h in enumerate(hits):
-                fused[h["chunk_id"]] = fused.get(h["chunk_id"], 0.0) + weight / (cfg.rrf_k + rank + 1)
-                doc_of[h["chunk_id"]] = h["doc_id"]
-        best = sorted(fused.items(), key=lambda kv: -kv[1])[: cfg.top_k]
-        rows.append({"question_id": qid, "chunks": [{"chunk_id": c, "doc_id": doc_of[c], "score": s} for c, s in best]})
-    write_jsonl(ctx.out / "retrieval.jsonl", rows)
-    return {"n_questions": len(rows)}
+    """BM25 + vector, merged with Reciprocal Rank Fusion."""
+    return _run(ctx, lambda q, s: rrf([(cfg.bm25_weight, s.bm25(q, cfg.candidates)),
+                                       (cfg.vector_weight, s.vector(q, cfg.candidates))], cfg.rrf_k, cfg.top_k))
+
+
+@register("retrieve", "python", PythonRetrieveConfig)
+def python_retriever(cfg: PythonRetrieveConfig, ctx: StageContext) -> dict:
+    """Your own retrieve(question, search, top_k) function, edited in the UI."""
+    fn = load_functions(cfg.code, "retrieve")["retrieve"]
+
+    def per_question(q, s):
+        hits = fn(q, s, cfg.top_k)
+        if not isinstance(hits, list) or not all(isinstance(h, dict) and "chunk_id" in h and "doc_id" in h for h in hits):
+            raise ScriptError('retrieve() must return a list of dicts with "chunk_id" and "doc_id"')
+        return hits[: cfg.top_k]
+    return _run(ctx, per_question)

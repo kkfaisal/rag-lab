@@ -68,6 +68,7 @@ export interface QuestionDetail {
 export interface DatasetInfo {
   name: string
   adapter: string
+  code: string | null
   created_at: string
   latest_snapshot: number
   n_questions: number
@@ -91,3 +92,41 @@ export const heat = (v: number | null | undefined): string =>
 
 // Metrics expressed as percentages (others, like extra_docs, are counts).
 export const isPct = (m: string) => !['extra_docs', 'invalid_extra_docs', 'n'].includes(m)
+
+// ---------------------------------------------------------------- playground types
+
+export interface GraphNode { id: string; stage: string; impl: string; params: Record<string, unknown>; label?: string; position: { x: number; y: number } }
+export interface Graph { id?: string; name: string; description: string; nodes: GraphNode[]; edges: { source: string; target: string }[]; updated_at?: string }
+export type GraphKind = 'pipeline' | 'retriever'
+
+export interface SchemaProp { type?: string; title?: string; default?: unknown; anyOf?: { type?: string }[]; items?: { type?: string }; description?: string }
+export interface ImplInfo { impl: string; doc: string; schema: { properties?: Record<string, SchemaProp> }; defaults: Record<string, unknown> }
+export interface Catalog { stages: Record<string, ImplInfo[]>; kinds: Record<GraphKind, string[]>; templates: { extract: string }; has_api_key: boolean; bench_ready: boolean }
+
+export interface IndexStatus {
+  pipeline_id: string; pipeline_name: string; node_id: string; label: string
+  state: 'built' | 'stale' | 'not built' | 'failed' | 'invalid'
+  error: string | null; run_id: string | null; dataset?: string; subset?: string; snapshot?: number; built_at?: string
+  stages: (StageLog & { stats?: Record<string, unknown> })[]
+}
+
+export interface Job {
+  id: string; kind: 'build' | 'experiment' | 'ingest'; title: string; status: 'queued' | 'running' | 'ok' | 'failed' | 'cancelled'
+  created_at: string; started_at?: string; finished_at?: string; run_id?: string; error?: string; log?: string
+  spec: { meta?: Record<string, string>; dataset?: string }
+  run?: { current_stage: string | null; stages: StageLog[] }
+}
+
+export interface MatrixCell { run_id: string; index: string; index_key: string; retriever_id: string; retriever: string; dataset: string; snapshot: number; n_questions: number; judged: unknown; overall: Metrics; cost_usd: number }
+
+export async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await fetch(path, { method, headers: body instanceof FormData ? undefined : { 'content-type': 'application/json' },
+    body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body) })
+  if (!r.ok) {
+    const text = await r.text()
+    let detail = text
+    try { detail = JSON.parse(text).detail ?? text } catch { /* not json */ }
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return r.json()
+}

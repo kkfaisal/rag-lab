@@ -14,11 +14,15 @@ class StageContext:
     out: Path                                  # write this stage's outputs here
     dirs: dict[str, Path]                      # output dirs of upstream stages, by stage name
     metas: dict[str, dict]                     # their meta.json contents
-    corpus: duckdb.DuckDBPyConnection          # read-only connection to data/corpus.duckdb
-    dataset: str
-    snapshot: int
-    subset: str
     fingerprint: str                           # hash of this stage's config + code, *without* upstream
+    # ingestion stages
+    corpus: duckdb.DuckDBPyConnection | None = None       # read-only connection to data/corpus.duckdb
+    dataset: str = ""
+    snapshot: int = 0
+    subset: str = "all"
+    # retrieval stages
+    target: object | None = None               # the open Target being searched
+    embed: dict | None = None                  # how the target's vectors were made (to embed questions the same way)
     questions: list[dict] = field(default_factory=list)   # rows from the questions table
 
     def store(self, stage: str) -> duckdb.DuckDBPyConnection:

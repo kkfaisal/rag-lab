@@ -4,7 +4,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { fmt, get, heat, isPct, type QuestionRow, type RunDetail } from '../api'
 
 const display = (v: unknown) => (typeof v === 'object' ? JSON.stringify(v) : String(v))
-const STAGES = ['load', 'chunk', 'embed', 'index', 'retrieve', 'rerank', 'generate', 'evaluate']
+const STAGES = ['target', 'retrieve', 'rerank', 'generate', 'evaluate']
 
 export default function RunPage() {
   const { runId } = useParams()
@@ -27,8 +27,9 @@ export default function RunPage() {
   const u = d.usage.generate
   return (
     <>
-      <h1>{d.run.run_id} <span className={`badge ${d.run.status}`}>{d.run.status}</span></h1>
-      <p className="muted">{d.config.description}</p>
+      <p className="small"><Link to="/runs">← Runs</Link></p>
+      <h1 style={{ fontSize: 20 }}>{d.config.description || d.run.run_id} <span className={`pill ${d.run.status === 'ok' ? 'ok' : 'failed'}`}>{d.run.status}</span></h1>
+      <p className="faint small mono">{d.run.run_id}</p>
       <p className="small muted">
         {d.run.n_questions} questions · subset <b>{String(d.config.data.subset)}</b> · {fmt(d.run.duration_s, 0)}s ·
         git {d.run.git.sha?.slice(0, 10) ?? 'none'}{d.run.git.dirty ? ' (dirty — diff saved)' : ''} ·
@@ -36,7 +37,7 @@ export default function RunPage() {
       </p>
       {d.error && <details open><summary>Error</summary><pre>{d.error}</pre></details>}
 
-      <h2>Pipeline</h2>
+      <div className="section-title">Pipeline</div>
       <div className="pipeline">
         {STAGES.map(s => {
           const cfg = d.config[s] ?? {}
@@ -44,14 +45,14 @@ export default function RunPage() {
           return (
             <div className="stage" key={s}>
               <h3>{s}</h3>
-              <div className="impl">{String(cfg.impl)}</div>
+              <div className="impl">{String(cfg.impl ?? cfg.name ?? '')}</div>
               <dl>
-                {Object.entries(cfg).filter(([k]) => k !== 'impl' && k !== 'system_prompt').map(([k, v]) => (
+                {Object.entries(cfg).filter(([k]) => !['impl', 'system_prompt', 'code', 'name', 'id'].includes(k)).map(([k, v]) => (
                   <Fragment key={k}><dt>{k}</dt><dd title={display(v)}>{display(v).length > 40 ? display(v).slice(0, 38) + '…' : display(v)}</dd></Fragment>
                 ))}
               </dl>
               {log && <div className="small" style={{ marginTop: 8 }}>
-                {log.cached ? <span className="badge cached">cached</span> : <span className="badge">ran {fmt(log.duration_s)}s</span>}{' '}
+                {log.cached ? <span className="pill plain">cached</span> : <span className="pill plain">ran {fmt(log.duration_s)}s</span>}{' '}
                 <span className="mono muted" title={`code ${d.code_hashes[s]?.hash}`}>{log.key}</span>
               </div>}
             </div>
@@ -61,9 +62,9 @@ export default function RunPage() {
       {typeof d.config.generate?.system_prompt === 'string' &&
         <details><summary>generate.system_prompt</summary><pre>{d.config.generate.system_prompt}</pre></details>}
 
-      <h2>Metrics by category</h2>
+      <div className="section-title">Metrics by category</div>
       <div className="grid2">
-        <div className="panel">
+        <div className="card">
           <div className="row"><select value={metric} onChange={e => setMetric(e.target.value)}>
             {metricNames.map(m => <option key={m}>{m}</option>)}</select>
             <span className="muted small">overall: <b>{fmt(d.metrics.overall?.[metric])}</b></span></div>
@@ -77,7 +78,7 @@ export default function RunPage() {
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div className="panel">
+        <div className="card">
           <h3 style={{ margin: '0 0 8px', fontSize: 13 }}>Usage & cost</h3>
           {u ? <table><tbody>
             <tr><td>LLM requests</td><td className="num">{u.requests}</td></tr>
@@ -93,7 +94,7 @@ export default function RunPage() {
         </div>
       </div>
 
-      <div className="scroll"><table style={{ marginTop: 12 }}>
+      <div className="table-wrap"><table style={{ marginTop: 12 }}>
         <thead><tr><th>category</th>{metricNames.concat('n').map(m => <th key={m} className="num">{m}</th>)}</tr></thead>
         <tbody>{Object.entries({ overall: d.metrics.overall ?? {}, ...d.metrics.by_category }).map(([cat, m]) => (
           <tr key={cat}><td><b>{cat}</b></td>{metricNames.concat('n').map(k => (
@@ -101,8 +102,8 @@ export default function RunPage() {
         ))}</tbody>
       </table></div>
 
-      <h2>Questions</h2>
-      <div className="scroll"><table>
+      <div className="section-title">Questions</div>
+      <div className="table-wrap"><table>
         <thead><tr><th>id</th><th>category</th><th>question</th>
           {['recall@10', 'answer_recall', 'correctness', 'completeness'].map(m => <th key={m} className="num">{m}</th>)}</tr></thead>
         <tbody>{qs.map(q => (

@@ -6,7 +6,6 @@ Outputs reranked.jsonl, same shape as retrieval.jsonl.
 import shutil
 from functools import lru_cache
 
-import duckdb
 from pydantic import BaseModel
 
 from ..registry import NoConfig, register
@@ -37,21 +36,17 @@ def _load(name: str):
 
 
 def _rerank(ctx: StageContext, rerank_one) -> dict:
-    """Apply rerank_one(question, chunks_with_text) -> ranked chunks to every question."""
+    """Apply rerank_one(question, chunks) -> ranked chunks to every question."""
     retrieved = read_jsonl(ctx.dirs["retrieve"] / "retrieval.jsonl")
-    con = duckdb.connect(str(ctx.dirs["index"] / "index.duckdb"), read_only=True)
     questions = {q["question_id"]: q["question"] for q in ctx.questions}
     out = []
     for row in retrieved:
-        ids = [c["chunk_id"] for c in row["chunks"]]
-        texts = dict(con.execute("SELECT chunk_id, text FROM chunks WHERE chunk_id IN (SELECT unnest(?))", [ids]).fetchall())
-        chunks = [{**c, "text": texts[c["chunk_id"]]} for c in row["chunks"]]
-        before = {c["chunk_id"]: c["score"] for c in row["chunks"]}
-        ranked = rerank_one(questions[row["question_id"]], chunks) if chunks else []
+        before = {c["chunk_id"]: c for c in row["chunks"]}
+        ranked = rerank_one(questions[row["question_id"]], row["chunks"]) if row["chunks"] else []
         out.append({"question_id": row["question_id"], "chunks": [
-            {"chunk_id": c["chunk_id"], "doc_id": c["doc_id"], "retrieval_score": before.get(c["chunk_id"]),
-             "score": float(c.get("score", 0.0))} for c in ranked]})
-    con.close()
+            {"chunk_id": c["chunk_id"], "doc_id": c["doc_id"], "retrieval_score": before.get(c["chunk_id"], {}).get("score"),
+             "score": float(c.get("score", 0.0)), "text": c.get("text") or before.get(c["chunk_id"], {}).get("text", "")}
+            for c in ranked]})
     write_jsonl(ctx.out / "reranked.jsonl", out)
     ctx.log(f"reranked {len(out)} questions")
     return {"n_questions": len(out)}

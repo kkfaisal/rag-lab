@@ -1,4 +1,5 @@
-"""rag-lab command line. Run `rag-lab --help`."""
+"""rag-lab command line. The UI (`rag-lab serve`) is the main way to use the tool;
+these commands cover setup and running saved pipelines without a browser."""
 
 from typing import Optional
 
@@ -9,38 +10,30 @@ from . import paths
 
 load_dotenv(paths.ROOT / ".env")
 
-app = typer.Typer(no_args_is_help=True, add_completion=False, help="Iterate on RAG pipelines against EnterpriseRAG-Bench.")
-data_app = typer.Typer(no_args_is_help=True, help="Download and prepare benchmark data.")
-bench_app = typer.Typer(no_args_is_help=True, help="The benchmark's own judge.")
+app = typer.Typer(no_args_is_help=True, add_completion=False, help="A playground for RAG ingestion and retrieval pipelines.")
+data_app = typer.Typer(no_args_is_help=True, help="Datasets: documents + benchmark questions.")
+bench_app = typer.Typer(no_args_is_help=True, help="The EnterpriseRAG-Bench judge.")
 runs_app = typer.Typer(no_args_is_help=True, help="Inspect and index runs.")
 app.add_typer(data_app, name="data")
 app.add_typer(bench_app, name="bench")
 app.add_typer(runs_app, name="runs")
 
 
-@data_app.command("download")
-def data_download(slices: Optional[list[str]] = typer.Option(None, "--slice", help="e.g. slack_slice_0001 (repeatable). Default: all_documents.zip")):
-    """Download EnterpriseRAG-Bench questions.jsonl and documents into data/raw/."""
-    from . import data
-    data.download(slices)
-
-
-@data_app.command("load")
-def data_load():
-    """Ingest the downloaded EnterpriseRAG-Bench release (data/raw/) as dataset 'enterprise_rag_bench'."""
-    from . import data
-    data.ingest(data.BENCH, paths.RAW, adapter=data.BENCH, sync=True, note="EnterpriseRAG-Bench release")
+@app.command()
+def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
+    """Start the web UI and API."""
+    import uvicorn
+    uvicorn.run("rag_lab.api:app", host=host, port=port, reload=reload)
 
 
 @data_app.command("add")
 def data_add(dataset: str = typer.Argument(..., help="Dataset name, e.g. my_docs"),
-             path: str = typer.Argument(..., help="Folder (folder adapter) or release dir/zip (bench adapter)"),
-             adapter: Optional[str] = typer.Option(None, help="folder | enterprise_rag_bench (default: folder for new datasets)"),
-             sync: bool = typer.Option(False, help="Treat PATH as the full dataset: docs missing from it are deleted"),
-             note: str = ""):
-    """Incrementally add docs (new/changed) to a dataset, creating a new snapshot."""
+             path: Optional[str] = typer.Argument(None, help="Folder with documents and questions.jsonl"),
+             source: str = typer.Option("folder", help="folder | enterprise_rag_bench"),
+             sync: bool = typer.Option(False, help="Also delete docs that are no longer in the folder")):
+    """Create or update a dataset. Only new and changed documents are stored (a new snapshot)."""
     from . import data
-    data.ingest(dataset, path, adapter=adapter, sync=sync, note=note)
+    data.ingest_source(dataset, source, {"path": path}, sync=sync)
 
 
 @data_app.command("list")
@@ -56,9 +49,8 @@ def data_list():
 
 
 @data_app.command("subset")
-def data_subset(name: str = "dev", dataset: str = "enterprise_rag_bench", per_category: int = 10,
-                distractors: int = 20_000, seed: int = 42):
-    """Build a dev subset: N questions per category + their gold docs + random distractors."""
+def data_subset(dataset: str, name: str = "dev", per_category: int = 10, distractors: int = 20_000, seed: int = 42):
+    """Build a smaller subset: N questions per category + their gold docs + random distractors."""
     from . import data
     data.build_subset(dataset, name, per_category, distractors, seed)
 
@@ -71,31 +63,30 @@ def bench_setup():
 
 
 @app.command()
-def run(config: str = typer.Argument(..., help="configs/<name>.yaml"),
-        limit: Optional[int] = typer.Option(None, help="Only the first N questions of the subset"),
-        set_: Optional[list[str]] = typer.Option(None, "--set", help="Override, e.g. --set retrieve.top_k=50")):
-    """Run a pipeline config end to end and record it under runs/."""
-    from . import pipeline
-    pipeline.run(config, set_ or [], limit)
+def ingest(pipeline: str = typer.Argument(..., help="Id of a saved ingestion pipeline (see workspace/ingestion/)")):
+    """Run an ingestion pipeline: every path that ends in a target node."""
+    from . import pipeline as engine, workspace
+    p = workspace.get_graph("ingestion", pipeline)
+    for node in workspace.target_nodes(p):
+        cfg, meta = workspace.compile_ingest(p, node["id"])
+        engine.run_ingest(cfg, meta=meta)
 
 
-@app.command("impls")
-def list_impls():
-    """List every registered stage implementation and its config fields."""
-    from . import config  # noqa: F401  (registers implementations)
-    from .registry import REGISTRY
-    for stage, impls in REGISTRY.items():
-        typer.echo(stage)
-        for name, impl in sorted(impls.items()):
-            fields = ", ".join(f"{k}={v.default!r}" for k, v in impl.config_cls.model_fields.items() if k != "system_prompt")
-            typer.echo(f"  {name:22} {fields}")
+@app.command()
+def benchmark(pipeline: str = typer.Argument(..., help="Id of a saved retrieval pipeline (see workspace/retrieval/)"),
+              target: Optional[str] = typer.Option(None, help="Benchmark against this target instead of the pipeline's own"),
+              limit: Optional[int] = typer.Option(None, help="Only the first N questions")):
+    """Run a retrieval pipeline against a target and score it on the dataset's questions."""
+    from . import pipeline as engine, workspace
+    cfg, meta, default_limit = workspace.compile_benchmark(workspace.get_graph("retrieval", pipeline), target)
+    engine.run_benchmark(cfg, limit=limit or default_limit, meta=meta)
 
 
 @runs_app.command("list")
 def runs_list():
     from . import tracking
     con = tracking.connect_read()
-    for r in con.execute("SELECT run_id, status, n_questions, cost_usd, overall FROM runs ORDER BY created_at DESC").fetchall():
+    for r in con.execute("SELECT run_id, kind, status, n_questions, overall FROM runs ORDER BY created_at DESC").fetchall():
         typer.echo(" ".join(str(x) for x in r))
 
 
@@ -104,10 +95,3 @@ def runs_reindex():
     """Rebuild runs/index.duckdb from the run folders."""
     from . import tracking
     typer.echo(f"Indexed {tracking.reindex()} runs")
-
-
-@app.command()
-def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
-    """Start the API (and the built web UI, if web/dist exists)."""
-    import uvicorn
-    uvicorn.run("rag_lab.api:app", host=host, port=port, reload=reload)

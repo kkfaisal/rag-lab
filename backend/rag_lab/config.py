@@ -1,9 +1,7 @@
-"""Run configs: YAML in, fully-resolved (all defaults filled in) dict out.
+"""Run configs: a dict in, a fully-resolved dict (all defaults filled in) out.
 
-    name: baseline
-    data: {dataset: enterprise_rag_bench, subset: dev, snapshot: latest}
-    chunk: {impl: fixed, chunk_size: 1200}
-    ...
+    {"name": "baseline", "data": {"dataset": ..., "subset": "all", "snapshot": "latest"},
+     "chunk": {"impl": "fixed", "chunk_size": 1200}, ...}
 
 Each stage block names an `impl` from the registry; the remaining keys are
 validated against that implementation's Pydantic config class. The resolved
@@ -21,8 +19,8 @@ from .registry import STAGES, get
 
 class DataConfig(BaseModel):
     model_config = {"extra": "forbid"}
-    dataset: str = "enterprise_rag_bench"
-    subset: str = "dev"                  # a named subset, or "all"
+    dataset: str
+    subset: str = "all"                  # a named subset, or "all"
     snapshot: int | str = "latest"       # resolved to a number when the run starts
 
 
@@ -48,12 +46,10 @@ def apply_overrides(raw: dict, overrides: list[str]) -> dict:
 def resolve(raw: dict, stages: list[str] = STAGES) -> dict:
     """Validate every stage block and fill in defaults. `stages` lets an index
     build resolve only load..index."""
-    out = {
-        "name": raw.get("name", "unnamed"),
-        "description": raw.get("description", ""),
-        "data": DataConfig(**raw.get("data", {})).model_dump(),
-    }
-    unknown = set(raw) - {"name", "description", "data", *STAGES}
+    out = {"name": raw.get("name", "unnamed"), "description": raw.get("description", "")}
+    if "data" in raw:
+        out["data"] = DataConfig(**raw["data"]).model_dump()
+    unknown = set(raw) - {"name", "description", "data", "target", *STAGES}
     if unknown:
         raise SystemExit(f"Unknown top-level config keys: {sorted(unknown)}")
     for stage in stages:

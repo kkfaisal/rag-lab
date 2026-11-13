@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmt, get, heat, type RunRow } from '../api'
+import { Empty, PageHead } from '../components/ui'
 
 // Columns shown by default; any other param is still filterable.
-const PARAM_COLS = ['chunk.impl', 'embed.model', 'retrieve.impl', 'retrieve.top_k', 'rerank.impl', 'generate.model']
+const PARAM_COLS = ['target.name', 'retrieve.impl', 'retrieve.top_k', 'rerank.impl', 'generate.impl']
 const METRIC_COLS = ['recall@10', 'context_recall', 'answer_recall', 'correctness', 'completeness']
 
 type Filter = { key: string; value: string }
@@ -49,8 +50,7 @@ export default function Runs() {
   if (error) return <p className="muted">Could not load runs: {error}. Is <code>rag-lab serve</code> running?</p>
   return (
     <>
-      <h1>Runs</h1>
-      <p className="muted small">Every row is a folder in <code>runs/</code>. Click a header to sort; tick two runs to compare them.</p>
+      <PageHead title="Runs" sub={<>Every benchmark run, newest first. Each is a folder in <code>runs/</code> with its full config. Click a header to sort, filter by any setting, tick two to compare.</>} />
       <div className="row" style={{ margin: '12px 0' }}>
         <select value={dataset} onChange={e => setDataset(e.target.value)}>
           <option value="">All datasets</option>
@@ -75,7 +75,7 @@ export default function Runs() {
         <button className="primary" disabled={!sameDataset}
           onClick={() => nav(`/diff?a=${selected[0]}&b=${selected[1]}`)}>Compare {selected.length}/2</button>
       </div>
-      <div className="scroll">
+      <div className="table-wrap">
         <table>
           <thead><tr>
             <th></th><Th col="run_id" label="run" /><Th col="status" /><Th col="dataset" /><Th col="snapshot" label="snap" num /><Th col="n_questions" label="questions" num />
@@ -87,9 +87,9 @@ export default function Runs() {
             {rows.map(r => (
               <tr key={r.run_id}>
                 <td><input type="checkbox" checked={selected.includes(r.run_id)} onChange={() => toggle(r.run_id)} /></td>
-                <td><Link to={`/runs/${r.run_id}`}>{r.run_id}</Link>
-                  <div className="muted small">{r.git_sha?.slice(0, 7) ?? 'no commit'}{r.git_dirty ? ' (dirty)' : ''}{r.judged ? ' · judged' : ''}</div></td>
-                <td><span className={`badge ${r.status}`}>{r.status}</span></td>
+                <td><Link to={`/runs/${r.run_id}`}>{r.description || r.run_id}</Link>
+                  <div className="faint small">{String(r.created_at).replace('T', ' ').slice(0, 16)} · {r.git_sha?.slice(0, 7) ?? 'no commit'}{r.git_dirty ? ' (dirty)' : ''}{r.judged ? ' · judged' : ''}</div></td>
+                <td><span className={`pill ${r.status}`}>{r.status}</span></td>
                 <td className="small">{r.dataset}<div className="muted">{r.subset}</div></td>
                 <td className="num">{r.snapshot}</td>
                 <td className="num">{r.n_questions}</td>
@@ -102,7 +102,7 @@ export default function Runs() {
           </tbody>
         </table>
       </div>
-      {runs.length === 0 && <p className="muted">No runs yet. Try <code>rag-lab run configs/baseline.yaml --limit 20</code>.</p>}
+      {runs.length === 0 && <Empty>No benchmark runs yet. Open a <Link to="/retrieval">retrieval pipeline</Link> and press “Run benchmark”.</Empty>}
     </>
   )
 }

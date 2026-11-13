@@ -1,6 +1,7 @@
 """Registry of stage implementations.
 
 Every pipeline stage (chunk, embed, retrieve, ...) can have several implementations.
+(Targets — where chunks are stored and searched — have their own registry in targets/.)
 An implementation is a function plus a Pydantic config class:
 
     class FixedConfig(BaseModel):
@@ -22,7 +23,9 @@ from typing import Callable
 
 from pydantic import BaseModel
 
-STAGES = ["load", "chunk", "embed", "index", "retrieve", "rerank", "generate", "evaluate"]
+INGEST_STAGES = ["load", "chunk", "embed"]                       # then the chunks are written to a target
+BENCH_STAGES = ["retrieve", "rerank", "generate", "evaluate"]    # run against a target
+STAGES = INGEST_STAGES + BENCH_STAGES
 
 
 @dataclass

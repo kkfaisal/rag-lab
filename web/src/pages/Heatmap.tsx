@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fmt, get, heat, isPct } from '../api'
+import { PageHead } from '../components/ui'
 
 interface Cell { run_id: string; name: string; created_at: string; snapshot: number; category: string; value: number }
 interface HeatData { metrics: string[]; dataset: string | null; datasets: string[]; cells: Cell[] }
@@ -20,7 +21,7 @@ export default function Heatmap() {
 
   return (
     <>
-      <h1>Run × category</h1>
+      <PageHead title="By category" sub="One metric broken down by question category, for every benchmark run on a dataset." />
       <div className="row" style={{ margin: '8px 0 12px' }}>
         <select value={data.dataset ?? ''} onChange={e => setDataset(e.target.value)}>
           {data.datasets.map(d => <option key={d}>{d}</option>)}
@@ -30,11 +31,11 @@ export default function Heatmap() {
         </select>
         <span className="muted small">Green = high, red = low. Empty = metric not computed for that run (e.g. no judge).</span>
       </div>
-      <div className="scroll"><table className="heat">
+      <div className="table-wrap"><table className="heat">
         <thead><tr><th>run</th>{cats.map(c => <th key={c} className="num">{c === '_overall' ? 'overall' : c}</th>)}</tr></thead>
         <tbody>{runs.map(r => (
           <tr key={r.run_id}>
-            <td><Link to={`/runs/${r.run_id}`}>{r.run_id}</Link> <span className="muted small">snap {r.snapshot}</span></td>
+            <td><Link to={`/runs/${r.run_id}`}>{r.name || r.run_id}</Link> <span className="muted small">snap {r.snapshot}</span></td>
             {cats.map(c => {
               const v = value(r.run_id, c)
               return <td key={c} className="cell" style={{ background: isPct(metric) ? heat(v) : undefined }}>{fmt(v)}</td>

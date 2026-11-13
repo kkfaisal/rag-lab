@@ -121,6 +121,14 @@ def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: boo
     else:
         con.execute("INSERT INTO datasets(name, adapter, created_at, code) VALUES (?, ?, now(), ?)", [dataset, adapter, code])
 
+    # A dataset must come with benchmark questions: check before storing anything.
+    questions = list(ds.iter_questions(path))
+    if not questions and not con.execute("SELECT count(*) FROM questions WHERE dataset=?", [dataset]).fetchone()[0]:
+        con.execute("DELETE FROM datasets WHERE name=? AND name NOT IN (SELECT dataset FROM snapshots)", [dataset])
+        con.close()
+        raise SystemExit("No benchmark questions found. A dataset needs both documents and questions: add a "
+                         "questions.jsonl (or return them from your script's questions() function) and ingest again.")
+
     # 1. Stage every incoming doc with its content hash.
     con.execute("""CREATE OR REPLACE TEMP TABLE staged(doc_id VARCHAR, source VARCHAR, path VARCHAR, title VARCHAR,
                    text VARCHAR, metadata JSON, updated_at VARCHAR, content_hash VARCHAR)""")
@@ -144,8 +152,8 @@ def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: boo
     changed = con.execute("SELECT count(*) FROM incoming i JOIN cur c USING (doc_id) WHERE i.content_hash <> c.content_hash").fetchone()[0]
     deleted = con.execute("SELECT count(*) FROM cur ANTI JOIN incoming USING (doc_id)").fetchone()[0] if sync else 0
     if added + changed + deleted == 0:
-        print(f"No changes for '{dataset}'.")
-        _upsert_questions(con, dataset, ds, path)
+        print(f"No document changes for '{dataset}'.")
+        _upsert_questions(con, dataset, questions)
         con.close()
         return None
 
@@ -165,7 +173,7 @@ def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: boo
     n_docs = con.execute(f"SELECT count(*) FROM ({docs_sql()})", {"ds": dataset, "snap": snap, "subset": "all"}).fetchone()[0]
     con.execute("INSERT INTO snapshots VALUES (?, ?, now(), ?, ?, ?, ?, ?)",
                 [dataset, snap, added, changed, deleted, n_docs, note or str(path)])
-    _upsert_questions(con, dataset, ds, path)
+    _upsert_questions(con, dataset, questions)
     print(f"Dataset '{dataset}' snapshot {snap}: +{added:,} added, ~{changed:,} changed, -{deleted:,} deleted -> {n_docs:,} docs")
     con.close()
     return snap
@@ -183,8 +191,7 @@ def _insert_staged(con, batch) -> int:
     return n
 
 
-def _upsert_questions(con, dataset: str, ds, path: Path) -> None:
-    qs = list(ds.iter_questions(path))
+def _upsert_questions(con, dataset: str, qs: list[dict]) -> None:
     if not qs:
         return
     con.execute("DELETE FROM questions WHERE dataset=? AND question_id IN (SELECT unnest(?))",
@@ -193,6 +200,37 @@ def _upsert_questions(con, dataset: str, ds, path: Path) -> None:
         (dataset, q["question_id"], q.get("category", "default"), q["question"], q.get("gold_answer"),
          q.get("expected_doc_ids") or [], q.get("answer_facts") or [], q.get("source_types") or []) for q in qs])
     print(f"  {len(qs)} questions")
+
+
+# Built-in data sources. Each maps to a dataset adapter plus where its files live.
+SOURCES = {
+    "upload": "Files uploaded in the browser (.txt, .md, .jsonl, or a .zip of them) plus questions.jsonl",
+    "folder": "A folder on this machine, same file types",
+    "enterprise_rag_bench": "EnterpriseRAG-Bench: downloads the release, loads ~500k docs and 500 questions, builds a dev subset",
+    "script": "A Python script: extract(path) yields documents, questions(path) yields benchmark questions",
+}
+
+
+def ingest_source(dataset: str, source: str, params: dict, sync: bool = False) -> int | None:
+    """Ingest a dataset from one of the built-in sources (what the UI's Datasets page runs)."""
+    if source == "enterprise_rag_bench":
+        download(params.get("slices") or None)
+        snap = ingest(dataset, paths.RAW, adapter=BENCH, sync=True, note="EnterpriseRAG-Bench release")
+        build_subset(dataset, "dev", distractors=int(params.get("distractors", 20_000)))
+        return snap
+    upload_dir = paths.UPLOADS / dataset
+    if source == "upload":
+        return ingest(dataset, upload_dir, adapter="folder", sync=sync, note="uploaded files")
+    if source == "folder":
+        folder = Path(params.get("path") or "").expanduser()
+        if not folder.is_dir():
+            raise SystemExit(f"Folder not found: {folder}")
+        return ingest(dataset, folder, adapter="folder", sync=sync, note=str(folder))
+    if source == "script":
+        folder = Path(params["path"]).expanduser() if params.get("path") else upload_dir
+        folder.mkdir(parents=True, exist_ok=True)
+        return ingest(dataset, folder, adapter="script", sync=sync, note="extractor script", code=params.get("code"))
+    raise SystemExit(f"Unknown data source {source!r}. Available: {sorted(SOURCES)}")
 
 
 # ----------------------------------------------------------------------------- reading
@@ -204,6 +242,16 @@ def docs_sql(columns: str = "v.doc_id, v.source, v.path, c.title, c.text, v.cont
       SELECT {columns} FROM doc_versions v JOIN doc_contents c USING (content_hash)
       WHERE v.dataset = $ds AND v.valid_from <= $snap AND (v.valid_to IS NULL OR v.valid_to > $snap)
         AND ($subset = 'all' OR v.doc_id IN (SELECT doc_id FROM subset_docs WHERE dataset = $ds AND subset = $subset))"""
+
+
+def require_ready(con, dataset: str) -> str:
+    """A dataset can be used once it has documents *and* benchmark questions. Returns its adapter."""
+    row = con.execute("SELECT adapter FROM datasets WHERE name=?", [dataset]).fetchone()
+    if not row:
+        raise SystemExit(f"Unknown dataset {dataset!r}. Create it on the Datasets page first.")
+    if not con.execute("SELECT count(*) FROM questions WHERE dataset=?", [dataset]).fetchone()[0]:
+        raise SystemExit(f"Dataset {dataset!r} has no benchmark questions. Add a questions file and ingest again.")
+    return row[0]
 
 
 def latest_snapshot(con, dataset: str) -> int:

@@ -150,13 +150,68 @@ def equivalent_script(stage: str, impl: str, params: dict) -> dict | None:
     return None
 
 
+TARGET_TEMPLATE = '''import pickle
+from pathlib import Path
+
+import numpy as np
+
+# STATE_DIR is provided by rag-lab: a folder that belongs to this target.
+STORE = Path(STATE_DIR) / "store.pkl"
+
+
+def _load():
+    return pickle.loads(STORE.read_bytes()) if STORE.exists() else []
+
+
+def _save(rows):
+    STORE.write_bytes(pickle.dumps(rows))
+
+
+def clear():
+    """Remove everything (called for an overwrite)."""
+    _save([])
+
+
+def delete_docs(doc_ids):
+    """Remove all chunks of these documents (called before changed documents are re-added)."""
+    gone = set(doc_ids)
+    _save([r for r in _load() if r["doc_id"] not in gone])
+
+
+def add(chunks):
+    """Store chunks: dicts with chunk_id, doc_id, source, title, text, vector (list of floats or None)."""
+    _save(_load() + chunks)
+
+
+def search(query, query_vector, k):
+    """Return the best k chunks as dicts with chunk_id, doc_id, text, score.
+
+    query is the question text; query_vector is its embedding (None for keyword-only retrieval).
+    """
+    rows = _load()
+    if query_vector is None:
+        words = set(query.lower().split())
+        scored = [(len(words & set(r["text"].lower().split())), r) for r in rows]
+    else:
+        q = np.asarray(query_vector)
+        scored = [(float(np.dot(q, np.asarray(r["vector"]))), r) for r in rows if r["vector"] is not None]
+    scored.sort(key=lambda pair: -pair[0])
+    return [{"chunk_id": r["chunk_id"], "doc_id": r["doc_id"], "text": r["text"], "score": s} for s, r in scored[:k]]
+
+
+def count():
+    """Optional: number of chunks stored."""
+    return len(_load())
+'''
+
+
 class ScriptError(Exception):
     pass
 
 
-def load_functions(code: str, required: str, optional: tuple[str, ...] = ()) -> dict:
+def load_functions(code: str, required: str, optional: tuple[str, ...] = (), extra_globals: dict | None = None) -> dict:
     """Execute `code` and return the named functions from it."""
-    ns: dict = {"__name__": "rag_lab_script"}
+    ns: dict = {"__name__": "rag_lab_script", **(extra_globals or {})}
     try:
         exec(compile(code, "<script node>", "exec"), ns)
     except Exception as e:

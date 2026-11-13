@@ -8,7 +8,6 @@ Outputs
 import json
 from concurrent.futures import ThreadPoolExecutor
 
-import duckdb
 from pydantic import BaseModel
 
 from ..llm import Usage, get_provider
@@ -74,10 +73,7 @@ def _top_chunks(ctx: StageContext, n: int) -> tuple[list[dict], dict[str, str]]:
     rows = read_jsonl(ctx.dirs["rerank"] / "reranked.jsonl")
     for r in rows:
         r["chunks"] = r["chunks"][:n]
-    ids = [c["chunk_id"] for r in rows for c in r["chunks"]]
-    con = duckdb.connect(str(ctx.dirs["index"] / "index.duckdb"), read_only=True)
-    texts = dict(con.execute("SELECT chunk_id, text FROM chunks WHERE chunk_id IN (SELECT unnest(?))", [ids]).fetchall())
-    con.close()
+    texts = {c["chunk_id"]: c["text"] for r in rows for c in r["chunks"]}
     return rows, texts
 
 

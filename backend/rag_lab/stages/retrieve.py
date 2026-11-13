@@ -1,12 +1,10 @@
 """retrieve: find candidate chunks for every question.
 
-Outputs retrieval.jsonl: {"question_id", "chunks": [{"chunk_id", "doc_id", "score"}, ...]}
-ranked best-first.
+Outputs retrieval.jsonl: {"question_id", "chunks": [{"chunk_id", "doc_id", "score", "text"}, ...]}
+ranked best-first. The chunk text travels with the hit, so later stages (and the
+UI) never need to go back to the target.
 """
 
-import duckdb
-import numpy as np
-import pyarrow.parquet as pq
 from pydantic import BaseModel
 
 from ..registry import register
@@ -32,48 +30,31 @@ class PythonRetrieveConfig(TopKConfig):
 
 
 class Search:
-    """The two primitive searches over an index. Built-in retrievers and
-    script nodes are both written against this."""
+    """The two primitive searches over a target. Built-in retrievers and script
+    nodes are both written against this, so they work with any target type."""
 
     def __init__(self, ctx: StageContext):
-        self.ctx = ctx
-        self._con = self._emb = self._ids = None
+        self.target, self.embed = ctx.target, ctx.embed
 
     def bm25(self, query: str, k: int) -> list[dict]:
-        if not self.ctx.metas["index"].get("fts"):
-            raise SystemExit("BM25 search needs an index built with fts=true")
-        if self._con is None:
-            self._con = duckdb.connect(str(self.ctx.dirs["index"] / "index.duckdb"), read_only=True)
-            self._con.execute("LOAD fts")
-        rows = self._con.execute("""
-            SELECT chunk_id, doc_id, score, text FROM (
-              SELECT chunk_id, doc_id, text, fts_main_chunks.match_bm25(chunk_id, ?) AS score FROM chunks
-            ) WHERE score IS NOT NULL ORDER BY score DESC LIMIT ?""", [query, k]).fetchall()
-        return [{"chunk_id": c, "doc_id": d, "score": float(s), "text": t} for c, d, s, t in rows]
+        if not self.target.text_search:
+            raise SystemExit("This target has no keyword (BM25) search. Use vector retrieval, or a target that supports it.")
+        return self.target.search_text(query, k)
 
     def vector(self, query: str, k: int) -> list[dict]:
-        meta = self.ctx.metas["embed"]
-        if not meta.get("n"):
-            raise SystemExit("Vector search needs embeddings (the pipeline's embed node must not be 'none')")
-        if self._emb is None:
-            self._emb = np.load(self.ctx.dirs["embed"] / "embeddings.npy")
-            t = pq.read_table(self.ctx.dirs["chunk"] / "chunks.parquet", columns=["chunk_id", "doc_id", "text"])
-            self._ids = (t.column("chunk_id").to_pylist(), t.column("doc_id").to_pylist(), t.column("text"))
-        if meta.get("code"):                                  # index embedded by a script node
-            qv = script_query_vector(meta["code"], query)
-        else:
-            qv = encode(meta["model"], [meta["query_prefix"] + query], meta["max_seq_length"])[0]
-        scores = self._emb @ qv                              # cosine similarity (vectors are normalised)
-        k = min(k, len(scores))
-        top = np.argpartition(-scores, k - 1)[:k]
-        top = top[np.argsort(-scores[top])]
-        chunk_ids, doc_ids, texts = self._ids
-        return [{"chunk_id": chunk_ids[i], "doc_id": doc_ids[i], "score": float(scores[i]), "text": texts[int(i)].as_py()}
-                for i in top]
+        if not self.target.vector_search:
+            raise SystemExit("This target has no vector search. Use BM25 retrieval, or a target that stores vectors.")
+        if not self.embed:
+            raise SystemExit("This target was written without an embed node, so questions can't be embedded. "
+                             "Add an embed node to the ingestion pipeline, or use BM25 retrieval.")
+        if self.embed.get("code"):                            # embedded by a script node
+            qv = script_query_vector(self.embed["code"], query)
+        else:                                                 # same model + prefix as the chunks
+            qv = encode(self.embed["model"], [self.embed["query_prefix"] + query], self.embed["max_seq_length"])[0]
+        return self.target.search_vector(qv, k, query=query)
 
     def close(self) -> None:
-        if self._con is not None:
-            self._con.close()
+        pass
 
 
 def rrf(result_lists: list[tuple[float, list[dict]]], rrf_k: int, top_k: int) -> list[dict]:
@@ -94,7 +75,8 @@ def _run(ctx: StageContext, per_question) -> dict:
     for q in ctx.questions:
         hits = per_question(q["question"], search)
         rows.append({"question_id": q["question_id"],
-                     "chunks": [{"chunk_id": h["chunk_id"], "doc_id": h["doc_id"], "score": float(h.get("score", 0.0))} for h in hits]})
+                     "chunks": [{"chunk_id": h["chunk_id"], "doc_id": h["doc_id"], "score": float(h.get("score", 0.0)),
+                                 "text": h.get("text", "")} for h in hits]})
     search.close()
     write_jsonl(ctx.out / "retrieval.jsonl", rows)
     return {"n_questions": len(rows)}

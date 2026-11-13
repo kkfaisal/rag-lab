@@ -8,6 +8,8 @@ export interface RunRow {
   description: string
   created_at: string
   status: string
+  kind: string
+  meta: Record<string, string>
   dataset: string
   snapshot: number
   subset: string
@@ -26,7 +28,8 @@ export interface RunRow {
 export interface StageLog {
   stage: string
   impl: string
-  key: string
+  key: string | null
+  stats?: Record<string, unknown>
   cached: boolean
   duration_s: number
   original_duration_s: number | null
@@ -97,27 +100,30 @@ export const isPct = (m: string) => !['extra_docs', 'invalid_extra_docs', 'n'].i
 
 export interface GraphNode { id: string; stage: string; impl: string; params: Record<string, unknown>; label?: string; position: { x: number; y: number } }
 export interface Graph { id?: string; name: string; description: string; nodes: GraphNode[]; edges: { source: string; target: string }[]; updated_at?: string }
-export type GraphKind = 'pipeline' | 'retriever'
+export type GraphKind = 'ingestion' | 'retrieval'
 
 export interface SchemaProp { type?: string; title?: string; default?: unknown; anyOf?: { type?: string }[]; items?: { type?: string }; description?: string }
 export interface ImplInfo { impl: string; doc: string; source?: string; source_file?: string; scriptable?: boolean; schema: { properties?: Record<string, SchemaProp> }; defaults: Record<string, unknown> }
-export interface Catalog { stages: Record<string, ImplInfo[]>; kinds: Record<GraphKind, string[]>; templates: { extract: string }; has_api_key: boolean; bench_ready: boolean }
+export interface Catalog {
+  stages: Record<string, ImplInfo[]>; target_types: ImplInfo[]; kinds: Record<GraphKind, string[]>
+  sources: Record<string, string>; templates: { extract: string }; has_api_key: boolean; bench_ready: boolean
+}
 
-export interface IndexStatus {
-  pipeline_id: string; pipeline_name: string; node_id: string; label: string
-  state: 'built' | 'stale' | 'not built' | 'failed' | 'invalid'
-  error: string | null; run_id: string | null; dataset?: string; subset?: string; snapshot?: number; built_at?: string
-  stages: (StageLog & { stats?: Record<string, unknown> })[]
+export interface TargetWrite { version: number; at: string; mode: string; run_id: string; pipeline: string | null; docs_written: number; docs_skipped: number; chunks_written: number }
+export interface Target {
+  id?: string; name: string; description: string; type: string; params: Record<string, unknown>
+  version: number; n_docs: number; n_chunks: number; dataset: string | null; subset: string | null; snapshot: number | null
+  embed: Record<string, unknown> | null; history: TargetWrite[]
 }
 
 export interface Job {
-  id: string; kind: 'build' | 'experiment' | 'ingest'; title: string; status: 'queued' | 'running' | 'ok' | 'failed' | 'cancelled'
+  id: string; kind: 'dataset' | 'ingest' | 'benchmark'; title: string; status: 'queued' | 'running' | 'ok' | 'failed' | 'cancelled'
   created_at: string; started_at?: string; finished_at?: string; run_id?: string; error?: string; log?: string
   spec: { meta?: Record<string, string>; dataset?: string }
-  run?: { current_stage: string | null; stages: StageLog[] }
+  run?: { current_stage: string | null; stages: (StageLog & { stats?: Record<string, unknown> })[] }
 }
 
-export interface MatrixCell { run_id: string; index: string; index_key: string; retriever_id: string; retriever: string; dataset: string; snapshot: number; n_questions: number; judged: unknown; overall: Metrics; cost_usd: number }
+export interface MatrixCell { run_id: string; target_id: string; target: string; pipeline_id: string; pipeline: string; dataset: string; target_version: number; n_questions: number; judged: unknown; overall: Metrics; cost_usd: number; created_at: string }
 
 export async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   const r = await fetch(path, { method, headers: body instanceof FormData ? undefined : { 'content-type': 'application/json' },
@@ -130,3 +136,5 @@ export async function send<T>(method: string, path: string, body?: unknown): Pro
   }
   return r.json()
 }
+
+export const errText = (e: unknown) => String(e instanceof Error ? e.message : e)

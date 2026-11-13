@@ -32,7 +32,7 @@ export default function QuestionPage() {
   return (
     <>
       <p className="small"><Link to={`/runs/${runId}`}>← {runId}</Link></p>
-      <h1>{d.question.question_id} <span className="badge">{d.question.category}</span></h1>
+      <h1>{d.question.question_id} <span className="pill plain">{d.question.category}</span></h1>
       <p className="small muted">{d.dataset} · snapshot {d.snapshot}</p>
       <p style={{ fontSize: 16 }}>{d.question.question}</p>
       <div className="row small muted">
@@ -42,14 +42,14 @@ export default function QuestionPage() {
 
       <div className="grid2" style={{ marginTop: 16 }}>
         <div>
-          <h2>Generated answer {d.generation?.abstained && <span className="badge extra">abstained</span>}
-            {d.generation?.stop_reason === 'refusal' && <span className="badge miss">refusal</span>}</h2>
-          <div className="panel answer">{d.answer?.answer ?? <span className="muted">(no answer — retrieval-only run)</span>}</div>
+          <h2>Generated answer {d.generation?.abstained && <span className="pill extra">abstained</span>}
+            {d.generation?.stop_reason === 'refusal' && <span className="pill miss">refusal</span>}</h2>
+          <div className="card answer">{d.answer?.answer ?? <span className="muted">(no answer — retrieval-only run)</span>}</div>
           {typeof m.judge_reasoning === 'string' && <>
-            <h2>Judge: {m.correctness === 100 ? <span className="badge hit">correct</span> : <span className="badge miss">incorrect</span>}</h2>
-            <div className="panel small answer">{m.judge_reasoning}</div></>}
+            <h2>Judge: {m.correctness === 100 ? <span className="pill hit">correct</span> : <span className="pill miss">incorrect</span>}</h2>
+            <div className="card small answer">{m.judge_reasoning}</div></>}
           <h2>Gold answer</h2>
-          <div className="panel answer">{d.question.gold_answer}</div>
+          <div className="card answer">{d.question.gold_answer}</div>
           <h2>Facts the judge checks</h2>
           <ul className="small">{d.question.answer_facts.map((f, i) => <li key={i}>{f}</li>)}</ul>
         </div>
@@ -63,9 +63,9 @@ export default function QuestionPage() {
               <div key={id} className={`doc ${cited.has(id) ? 'hit' : 'miss'}`}>
                 <div><b>{title(id)}</b> <span className="muted small">{d.docs[id]?.source}</span></div>
                 <div className="small">
-                  {rank ? <span className="badge">retrieved #{rank}</span> : <span className="badge miss">not retrieved</span>}{' '}
-                  {context.has(id) ? <span className="badge">in prompt</span> : <span className="badge miss">not in prompt</span>}{' '}
-                  {cited.has(id) ? <span className="badge hit">cited</span> : <span className="badge miss">not cited</span>}
+                  {rank ? <span className="pill plain">retrieved #{rank}</span> : <span className="pill miss">not retrieved</span>}{' '}
+                  {context.has(id) ? <span className="pill plain">in prompt</span> : <span className="pill miss">not in prompt</span>}{' '}
+                  {cited.has(id) ? <span className="pill hit">cited</span> : <span className="pill miss">not cited</span>}
                   <span className="mono muted"> {id}</span>
                 </div>
                 <FullDoc docId={id} d={d} />

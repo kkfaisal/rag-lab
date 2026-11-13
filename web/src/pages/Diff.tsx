@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { fmt, get, type RunRow } from '../api'
+import { PageHead } from '../components/ui'
 
 interface DiffRow { question_id: string; category: string; question: string; a: number | null; b: number | null; status: string }
 interface DiffData { metric: string; snapshots: number[]; metrics: string[]; counts: Record<string, number>; rows: DiffRow[] }
@@ -23,27 +24,26 @@ export default function Diff() {
   const pick = (k: 'a' | 'b', v: string) => (
     <select value={v} onChange={e => set(k, e.target.value)}>
       <option value="">run {k.toUpperCase()}…</option>
-      {runs.filter(r => k === 'a' || !runA || r.dataset === runA.dataset).map(r => <option key={r.run_id} value={r.run_id}>{r.run_id} ({r.dataset})</option>)}
+      {runs.filter(r => k === 'a' || !runA || r.dataset === runA.dataset).map(r => <option key={r.run_id} value={r.run_id}>{r.description || r.name} · {String(r.created_at).replace('T', ' ').slice(5, 16)}</option>)}
     </select>
   )
   const runA = runs.find(r => r.run_id === a)
   const rows = data?.rows.filter(r => r.status === tab) ?? []
   return (
     <>
-      <h1>Compare two runs</h1>
-      <p className="muted small">"Fixed" = the metric went up from A to B for that question; "broken" = it went down.</p>
+      <PageHead title="Compare two runs" sub="Question by question: “fixed” means the metric went up from A to B, “broken” means it went down." />
       <div className="row" style={{ margin: '8px 0' }}>
         {pick('a', a)} → {pick('b', b)}
         {data && <select value={data.metric} onChange={e => set('metric', e.target.value)}>
           {data.metrics.map(m => <option key={m}>{m}</option>)}</select>}
       </div>
-      {error && <p className="badge miss">{error}</p>}
+      {error && <p className="pill miss">{error}</p>}
       {data && data.snapshots[0] !== data.snapshots[1] &&
         <p className="small muted">Note: A uses snapshot {data.snapshots[0]}, B uses snapshot {data.snapshots[1]} — the documents differ, not just the pipeline.</p>}
       {data && <>
         <div className="tabs">{['fixed', 'broken', 'same', 'n/a'].map(s => (
           <button key={s} className={tab === s ? 'active' : ''} onClick={() => setTab(s)}>{s} ({data.counts[s]})</button>))}</div>
-        <div className="scroll"><table>
+        <div className="table-wrap"><table>
           <thead><tr><th>question</th><th>category</th><th></th><th className="num">A</th><th className="num">B</th></tr></thead>
           <tbody>{rows.map(r => (
             <tr key={r.question_id}>

@@ -1,18 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { fmt, get, send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type IndexStatus } from '../api'
+import { errText, fmt, get, send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type Job, type Target } from '../api'
 import GraphEditor from '../components/GraphEditor'
 import { isActive, JobList, useJobs } from '../components/Jobs'
+import { Empty, ErrorNote, PageHead } from '../components/ui'
 
 const TEXT = {
-  pipeline: { title: 'Pipelines', path: '/pipelines', blurb: 'Turn documents into a searchable index: source → chunk → embed → index. Branch to try several strategies side by side; every index node is saved and reusable.' },
-  retriever: { title: 'Retrieval', path: '/retrieval', blurb: 'How questions are answered from an index: retrieve → rerank → generate. Pair any setup with any index on the Experiments page.' },
-}
-const BLANK: Record<GraphKind, (ds: string) => Graph> = {
-  pipeline: ds => ({ name: '', description: '', edges: [], nodes: [{ id: 'source', stage: 'source', impl: 'dataset', params: { dataset: ds, subset: 'all', snapshot: 'latest' }, position: { x: 20, y: 80 } }] }),
-  retriever: () => ({ name: '', description: '', edges: [], nodes: [{ id: 'retrieve', stage: 'retrieve', impl: 'hybrid', params: {}, position: { x: 20, y: 80 } }] }),
+  ingestion: { title: 'Ingestion pipelines', path: '/ingestion', noun: 'ingestion pipeline', job: 'ingest',
+    blurb: 'Source → chunk → embed → target. Running a pipeline writes its chunks to the target, appending or overwriting as the target node says. Branch to fill several targets from one source.' },
+  retrieval: { title: 'Retrieval pipelines', path: '/retrieval', noun: 'retrieval pipeline', job: 'benchmark',
+    blurb: 'Target → retrieve → rerank → generate → benchmark. Running a pipeline answers the dataset\'s questions from the target and scores the result.' },
 }
 const strip = (g: Graph) => JSON.stringify({ n: g.name, d: g.description, nodes: g.nodes, edges: g.edges })
+
+function blank(kind: GraphKind, dataset: string, target: string): Graph {
+  const node = (id: string, impl: string, params: Record<string, unknown>, i: number): GraphNode => ({ id, stage: id, impl, params, position: { x: 290 * i, y: 60 } })
+  const nodes = kind === 'ingestion'
+    ? [node('source', 'dataset', { dataset, subset: 'all', snapshot: 'latest' }, 0), node('chunk', 'fixed', {}, 1),
+       node('embed', 'sentence_transformers', {}, 2), node('target', 'target', { target_id: target, mode: 'append' }, 3)]
+    : [node('target', 'target', { target_id: target }, 0), node('retrieve', 'hybrid', {}, 1), node('benchmark', 'benchmark', { limit: 20, judge: 'auto' }, 2)]
+  return { name: '', description: '', nodes, edges: nodes.slice(1).map((n, i) => ({ source: nodes[i].id, target: n.id })) }
+}
 
 export default function GraphPage({ kind }: { kind: GraphKind }) {
   const { id } = useParams()
@@ -20,180 +28,163 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
   const t = TEXT[kind]
   const [catalog, setCatalog] = useState<Catalog>()
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
-  const [graphs, setGraphs] = useState<Graph[]>([])
+  const [targets, setTargets] = useState<Target[]>([])
+  const [graphs, setGraphs] = useState<Graph[] | null>(null)
   const [graph, setGraph] = useState<Graph>()          // the one being edited
   const [saved, setSaved] = useState('')               // its last-saved content, to detect unsaved edits
-  const [indexes, setIndexes] = useState<IndexStatus[]>([])
   const [error, setError] = useState<string>()
+  const [note, setNote] = useState<string>()
+  const [runTargets, setRunTargets] = useState<string[] | null>(null)   // retrieval: targets ticked in the run menu
   const jobs = useJobs()
   const busy = jobs.filter(isActive).length
 
-  const reload = useCallback(() => get<Graph[]>(`/api/graphs/${kind}`).then(setGraphs).catch(e => setError(String(e))), [kind])
+  const reload = useCallback(() => get<Graph[]>(`/api/graphs/${kind}`).then(setGraphs).catch(e => setError(errText(e))), [kind])
   useEffect(() => {
     get<Catalog>('/api/catalog').then(setCatalog)
-    get<DatasetInfo[]>('/api/datasets').then(setDatasets)
+    get<DatasetInfo[]>('/api/datasets').then(setDatasets).catch(() => undefined)
     reload()
   }, [reload])
-  useEffect(() => { get<IndexStatus[]>('/api/indexes').then(setIndexes).catch(() => undefined) }, [busy, saved])
+  useEffect(() => { get<Target[]>('/api/targets').then(setTargets).catch(() => undefined) }, [busy])
 
-  // Open the graph named in the URL (or the first one).
+  // Open the pipeline named in the URL (or the first one).
   useEffect(() => {
-    if (id === 'new' || graphs.length === 0) return
+    if (id === 'new' || !graphs?.length) return
     const g = graphs.find(x => x.id === id) ?? graphs[0]
     if (g.id !== id) { nav(`${t.path}/${g.id}`, { replace: true }); return }
-    setGraph(g); setSaved(strip(g))
+    setGraph(g); setSaved(strip(g)); setRunTargets(null); setNote(undefined)
   }, [id, graphs, nav, t.path])
 
   const dirty = graph !== undefined && strip(graph) !== saved
-  const save = async () => {
+  const save = async (): Promise<Graph | undefined> => {
     if (!graph) return
     try {
       const g = await send<Graph>('PUT', `/api/graphs/${kind}`, graph)
       setError(undefined); setGraph(g); setSaved(strip(g)); await reload()
       nav(`${t.path}/${g.id}`, { replace: true })
-    } catch (e) { setError(String(e)) }
+      return g
+    } catch (e) { setError(errText(e)) }
   }
   const create = () => {
-    const name = window.prompt(`Name of the new ${kind === 'pipeline' ? 'pipeline' : 'retrieval setup'}:`)
+    const name = window.prompt(`Name of the new ${t.noun}:`)
     if (!name) return
-    setGraph({ ...BLANK[kind](datasets[0]?.name ?? ''), name }); setSaved(''); nav(`${t.path}/new`)
+    setGraph({ ...blank(kind, datasets.find(d => d.n_questions)?.name ?? '', targets[0]?.id ?? ''), name }); setSaved(''); nav(`${t.path}/new`)
   }
   const duplicate = () => graph && (setGraph({ ...graph, id: undefined, name: `${graph.name} copy` }), setSaved(''), nav(`${t.path}/new`))
   const del = async () => {
-    if (!graph?.id || !window.confirm(`Delete "${graph.name}"? Its past runs are kept.`)) return
+    if (!graph?.id || !window.confirm(`Delete “${graph.name}”? Its past runs are kept.`)) return
     await send('DELETE', `/api/graphs/${kind}/${graph.id}`)
     setGraph(undefined); await reload(); nav(t.path)
   }
 
-  const statusOf = useCallback((nodeId: string) => indexes.find(i => i.pipeline_id === graph?.id && i.node_id === nodeId), [indexes, graph?.id])
-  const badge = useCallback((n: GraphNode) => {
-    if (kind !== 'pipeline' || n.stage !== 'index') return null
-    const s = statusOf(n.id)?.state ?? 'not built'
-    return <span className={`badge ${s === 'built' ? 'ok' : s === 'failed' || s === 'invalid' ? 'failed' : ''}`}>{s}</span>
-  }, [kind, statusOf])
+  const ownTarget = String(graph?.nodes.find(n => n.stage === 'target')?.params.target_id ?? '')
+  const chosen = runTargets ?? (ownTarget ? [ownTarget] : [])
+  const run = async () => {
+    setNote(undefined)
+    const g = dirty ? await save() : graph          // a run always uses the saved pipeline
+    if (!g?.id) return
+    try {
+      const body = kind === 'ingestion' ? { pipeline_id: g.id } : { pipeline_id: g.id, target_ids: chosen }
+      const out = await send<Job[]>('POST', `/api/jobs/${t.job}`, body)
+      setError(undefined); setNote(`${out.length} job${out.length === 1 ? '' : 's'} queued`)
+    } catch (e) { setError(errText(e)) }
+  }
 
-  if (!catalog) return <p className="muted">Loading…</p>
+  if (!catalog || graphs === null) return <p className="muted">Loading…</p>
+  const nTargets = graph?.nodes.filter(n => n.stage === 'target').length ?? 0
   return (
     <>
-      <h1>{t.title}</h1>
-      <p className="muted small">{t.blurb}</p>
-      <div className="row" style={{ margin: '10px 0' }}>
-        <select value={id === 'new' ? '' : graph?.id ?? ''} onChange={e => nav(`${t.path}/${e.target.value}`)}>
-          {id === 'new' && <option value="">(unsaved)</option>}
-          {graphs.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-        </select>
-        <button onClick={create}>New</button>
-        {graph && <>
-          <button onClick={duplicate}>Duplicate</button>
-          <button onClick={del} disabled={!graph.id}>Delete</button>
-          <input value={graph.name} style={{ width: 200 }} onChange={e => setGraph({ ...graph, name: e.target.value })} />
-          <input value={graph.description} placeholder="description" style={{ flex: 1, minWidth: 160 }} onChange={e => setGraph({ ...graph, description: e.target.value })} />
-          <button className="primary" onClick={save} disabled={!dirty}>{dirty ? 'Save' : 'Saved'}</button>
-        </>}
-      </div>
-      {error && <p className="badge failed">{error}</p>}
-      {datasets.length === 0 && kind === 'pipeline' && <p className="muted">No datasets yet — add one on the <Link to="/datasets">Datasets</Link> page first.</p>}
+      <PageHead title={t.title} sub={t.blurb}>
+        <button onClick={create}>New pipeline</button>
+      </PageHead>
+      {datasets.filter(d => d.n_questions).length === 0 && <div className="notice warn" style={{ marginBottom: 12 }}>No dataset is ready yet. Create one on the <Link to="/datasets">Datasets</Link> page first.</div>}
 
-      {graph && (
-        <GraphEditor key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets}
-          onChange={setGraph} badge={badge}
-          extra={(n, g) => kind === 'pipeline'
-            ? <PipelineExtra node={n} graph={g} dirty={dirty} status={statusOf(n.id)} />
-            : null} />)}
-
-      {graph && kind === 'pipeline' && (
-        <div className="grid2" style={{ marginTop: 16 }}>
-          <div>
-            <h2>Indexes produced by this pipeline</h2>
-            <table><thead><tr><th>index</th><th>state</th><th>chunks</th><th>built</th><th></th></tr></thead>
-              <tbody>{indexes.filter(i => i.pipeline_id === graph.id).map(i => (
-                <tr key={i.node_id}>
-                  <td><b>{i.label}</b>{i.error && <div className="small" style={{ color: 'var(--miss)' }}>{i.error}</div>}</td>
-                  <td><span className={`badge ${i.state === 'built' ? 'ok' : i.state === 'failed' || i.state === 'invalid' ? 'failed' : ''}`}>{i.state}</span></td>
-                  <td className="num">{fmt(i.stages.find(s => s.stage === 'chunk')?.stats?.n_chunks)}</td>
-                  <td className="small muted">{i.built_at?.slice(0, 16) ?? '–'}{i.snapshot ? ` · snap ${i.snapshot}` : ''}</td>
-                  <td><BuildButton pipelineId={graph.id!} nodeId={i.node_id} disabled={dirty || i.state === 'invalid'} label={i.state === 'built' ? 'Rebuild' : 'Build'} /></td>
-                </tr>))}</tbody></table>
-            {dirty && <p className="small muted">Save the pipeline to build its indexes.</p>}
+      {!graph ? <Empty>No {t.noun}s yet. <a href="#" onClick={e => { e.preventDefault(); create() }}>Create one</a>.</Empty> : <>
+        <div className="card" style={{ marginBottom: 12, padding: '10px 12px' }}>
+          <div className="row">
+            <select value={id === 'new' ? '' : graph.id ?? ''} onChange={e => nav(`${t.path}/${e.target.value}`)} style={{ maxWidth: 220 }}>
+              {id === 'new' && <option value="">(unsaved)</option>}
+              {graphs.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            <input value={graph.name} style={{ width: 190 }} aria-label="Pipeline name" onChange={e => setGraph({ ...graph, name: e.target.value })} />
+            <input className="grow" value={graph.description} placeholder="Description" style={{ minWidth: 140 }} onChange={e => setGraph({ ...graph, description: e.target.value })} />
+            <button className="ghost sm" onClick={duplicate}>Duplicate</button>
+            <button className="ghost sm danger" onClick={del} disabled={!graph.id}>Delete</button>
+            <button onClick={() => save()} disabled={!dirty}>{dirty ? 'Save' : 'Saved'}</button>
+            <button className="primary" onClick={run} disabled={kind === 'ingestion' ? nTargets === 0 : chosen.length === 0}>
+              {kind === 'ingestion' ? `▶ Run ingestion${nTargets > 1 ? ` (${nTargets} targets)` : ''}` : `▶ Run benchmark${chosen.length > 1 ? ` (${chosen.length} targets)` : ''}`}</button>
           </div>
-          <div><h2>Jobs</h2><JobList jobs={jobs} kinds={['build']} limit={5} /></div>
-        </div>)}
+          {kind === 'retrieval' && targets.length > 1 && (
+            <div className="row small" style={{ marginTop: 8 }}><span className="muted">Benchmark against:</span>
+              {targets.map(tg => (
+                <label key={tg.id} className={tg.version ? '' : 'faint'}><input type="checkbox" disabled={!tg.version} checked={chosen.includes(tg.id!)}
+                  onChange={() => setRunTargets(chosen.includes(tg.id!) ? chosen.filter(x => x !== tg.id) : [...chosen, tg.id!])} /> {tg.name}{tg.version ? '' : ' (empty)'}</label>))}
+            </div>)}
+          {note && <div className="small muted" style={{ marginTop: 6 }}>{note}{dirty ? '' : ' · unsaved edits are saved before a run'}</div>}
+        </div>
+        <ErrorNote error={error} />
 
-      {graph && kind === 'retriever' && <TryQuery graph={graph} indexes={indexes.filter(i => i.state === 'built')} />}
+        <GraphEditor key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets} targets={targets}
+          onChange={setGraph} extra={(n, g) => kind === 'ingestion' && n.stage === 'chunk' ? <ChunkPreview node={n} graph={g} /> : null} />
+
+        {kind === 'retrieval' && <TryQuery graph={graph} targets={targets.filter(tg => tg.version)} defaultTarget={ownTarget} />}
+        <div className="section-title">Runs of this page <span className="muted">· <Link to="/jobs">all jobs</Link></span></div>
+        <JobList jobs={jobs} kinds={[t.job]} limit={5} />
+      </>}
     </>
   )
 }
 
-function BuildButton({ pipelineId, nodeId, disabled, label }: { pipelineId: string; nodeId: string; disabled: boolean; label: string }) {
-  const [msg, setMsg] = useState<string>()
-  return <>
-    <button disabled={disabled} onClick={() => send('POST', '/api/jobs/build', { pipeline_id: pipelineId, node_id: nodeId }).then(() => setMsg('queued')).catch(e => setMsg(String(e)))}>{label}</button>
-    {msg && <span className="small muted"> {msg}</span>}
-  </>
-}
-
-// Extra controls in the settings panel: chunk preview on a real document, and build state for index nodes.
-function PipelineExtra({ node, graph, dirty, status }: { node: GraphNode; graph: Graph; dirty: boolean; status?: IndexStatus }) {
+// Chunk a random real document with the node's current settings (saved or not).
+function ChunkPreview({ node, graph }: { node: GraphNode; graph: Graph }) {
   const [out, setOut] = useState<{ doc: { title: string; source: string; chars: number }; chunks: string[] }>()
   const [err, setErr] = useState<string>()
   const dataset = useMemo(() => String(graph.nodes.find(n => n.stage === 'source')?.params.dataset ?? ''), [graph])
-  if (node.stage === 'chunk') return (
+  return (
     <div style={{ marginTop: 12 }}>
-      <button disabled={!dataset} onClick={() => {
+      <button className="sm" disabled={!dataset} onClick={() => {
         setErr(undefined)
-        send<typeof out>('POST', '/api/preview/chunk', { impl: node.impl, params: node.params, dataset }).then(setOut).catch(e => { setOut(undefined); setErr(String(e)) })
+        send<typeof out>('POST', '/api/preview/chunk', { impl: node.impl, params: node.params, dataset }).then(setOut).catch(e => { setOut(undefined); setErr(errText(e)) })
       }}>Preview on a random document</button>
-      {err && <pre style={{ color: 'var(--miss)' }}>{err}</pre>}
+      <ErrorNote error={err} />
       {out && <>
         <p className="small muted">{out.doc.source} · “{out.doc.title.slice(0, 60)}” · {out.doc.chars.toLocaleString()} chars → <b>{out.chunks.length} chunks</b></p>
         {out.chunks.slice(0, 12).map((c, i) => <details key={i}><summary className="small">chunk {i} · {c.length} chars</summary><pre>{c}</pre></details>)}
       </>}
-    </div>)
-  if (node.stage === 'index' && graph.id) return (
-    <div style={{ marginTop: 12 }}>
-      <p className="small">State: <b>{status?.state ?? 'not built'}</b>{status?.state === 'stale' && ' — the pipeline changed since the last build'}</p>
-      {status?.stages.map(s => (
-        <div key={s.stage} className="small muted">{s.stage}: {Object.entries(s.stats ?? {}).map(([k, v]) => `${k}=${v}`).join(', ')}</div>))}
-      <div style={{ marginTop: 8 }}><BuildButton pipelineId={graph.id} nodeId={node.id} disabled={dirty} label="Build this index" />
-        {dirty && <span className="small muted"> save first</span>}</div>
-    </div>)
-  return null
+    </div>
+  )
 }
 
 interface Hit { chunk_id: string; doc_id: string; score: number; text: string }
 
-// Run one query through retrieve + rerank against a built index, without saving anything.
-function TryQuery({ graph, indexes }: { graph: Graph; indexes: IndexStatus[] }) {
-  const [ix, setIx] = useState('')
+// Run one query through retrieve + rerank against a target, without saving anything.
+function TryQuery({ graph, targets, defaultTarget }: { graph: Graph; targets: Target[]; defaultTarget: string }) {
+  const [tid, setTid] = useState('')
   const [query, setQuery] = useState('')
   const [res, setRes] = useState<{ seconds: number; hits: Hit[] }>()
   const [err, setErr] = useState<string>()
   const [loading, setLoading] = useState(false)
-  const chosen = indexes.find(i => `${i.pipeline_id}/${i.node_id}` === ix) ?? indexes[0]
+  const target = tid || (targets.some(t => t.id === defaultTarget) ? defaultTarget : targets[0]?.id) || ''
   const run = () => {
-    if (!chosen || !query.trim()) return
+    if (!target || !query.trim()) return
     setLoading(true); setErr(undefined)
-    send<typeof res>('POST', '/api/preview/query', { pipeline_id: chosen.pipeline_id, node_id: chosen.node_id, retriever: graph, query })
-      .then(setRes).catch(e => { setRes(undefined); setErr(String(e)) }).finally(() => setLoading(false))
+    send<typeof res>('POST', '/api/preview/query', { pipeline: graph, target_id: target, query })
+      .then(setRes).catch(e => { setRes(undefined); setErr(errText(e)) }).finally(() => setLoading(false))
   }
   return (
-    <div style={{ marginTop: 16 }}>
-      <h2>Try a query</h2>
-      <p className="muted small">Runs the retrieve and rerank nodes as currently drawn (saved or not) against a built index. The first query loads models and can take ~10s.</p>
-      {indexes.length === 0 ? <p className="muted">No built index yet — build one on the <Link to="/pipelines">Pipelines</Link> page.</p> : (
+    <div className="card" style={{ marginTop: 12 }}>
+      <div className="card-head"><h2>Try a query</h2><span className="small muted">Runs retrieve + rerank as drawn above, saved or not. The first query loads models (~10s).</span></div>
+      {targets.length === 0 ? <p className="muted small">No target has data yet. Run an <Link to="/ingestion">ingestion pipeline</Link> first.</p> : (
         <div className="row">
-          <select value={chosen ? `${chosen.pipeline_id}/${chosen.node_id}` : ''} onChange={e => setIx(e.target.value)}>
-            {indexes.map(i => <option key={i.pipeline_id + i.node_id} value={`${i.pipeline_id}/${i.node_id}`}>{i.pipeline_name} / {i.label} ({i.dataset})</option>)}
-          </select>
-          <input style={{ flex: 1, minWidth: 240 }} value={query} placeholder="Ask something…" onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
+          <select value={target} onChange={e => setTid(e.target.value)}>{targets.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          <input className="grow" style={{ minWidth: 240 }} value={query} placeholder="Ask a question…" onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()} />
           <button className="primary" onClick={run} disabled={loading}>{loading ? 'Searching…' : 'Search'}</button>
         </div>)}
-      {err && <pre style={{ color: 'var(--miss)' }}>{err}</pre>}
+      <ErrorNote error={err} />
       {res && <>
         <p className="small muted">{res.hits.length} chunks in {res.seconds}s</p>
         {res.hits.map((h, i) => (
           <div key={h.chunk_id} className="doc">
-            <div className="small"><b>#{i + 1}</b> score {fmt(h.score, 3)} <span className="mono muted">{h.chunk_id}</span></div>
+            <div className="small"><b>#{i + 1}</b> · score {fmt(h.score, 3)} · <span className="mono faint">{h.chunk_id}</span></div>
             <details open={i < 3}><summary className="small">{h.text.split('\n')[0].slice(0, 110)}</summary><pre>{h.text}</pre></details>
           </div>))}
       </>}

@@ -21,3 +21,4 @@ WEB_DIST = ROOT / "web" / "dist"
 WORKSPACE = ROOT / "workspace"          # canvas definitions: workspace/pipelines/*.json, workspace/retrievers/*.json
 UPLOADS = DATA / "uploads"              # files uploaded through the UI, one folder per dataset
 JOBS = RUNS / "jobs"                    # background job records + logs
+TARGETS = DATA / "targets"              # one folder per target: its manifest and any local store files

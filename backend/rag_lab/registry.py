@@ -1,0 +1,63 @@
+"""Registry of stage implementations.
+
+Every pipeline stage (chunk, embed, retrieve, ...) can have several implementations.
+An implementation is a function plus a Pydantic config class:
+
+    class FixedConfig(BaseModel):
+        chunk_size: int = 1200
+
+    @register("chunk", "fixed", FixedConfig)
+    def fixed_chunker(cfg: FixedConfig, ctx: StageContext) -> dict: ...
+
+A run config then selects it with `chunk: {impl: fixed, chunk_size: 800}`.
+To add your own, write a function like the above in any module imported by
+`rag_lab.stages` and it will show up automatically.
+"""
+
+import hashlib
+import inspect
+import sys
+from dataclasses import dataclass
+from typing import Callable
+
+from pydantic import BaseModel
+
+STAGES = ["load", "chunk", "embed", "index", "retrieve", "rerank", "generate", "evaluate"]
+
+
+@dataclass
+class Impl:
+    stage: str
+    name: str
+    fn: Callable
+    config_cls: type[BaseModel]
+
+    def code_hash(self) -> str:
+        """Hash of the source of the module that defines this implementation.
+        Whole module (not just the function) so edits to helper functions count too."""
+        src = inspect.getsource(sys.modules[self.fn.__module__])
+        return hashlib.sha256(src.encode()).hexdigest()[:16]
+
+
+REGISTRY: dict[str, dict[str, Impl]] = {s: {} for s in STAGES}
+
+
+class NoConfig(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+def register(stage: str, name: str, config_cls: type[BaseModel] = NoConfig):
+    if stage not in REGISTRY:
+        raise ValueError(f"unknown stage {stage!r}; stages are {STAGES}")
+
+    def deco(fn):
+        REGISTRY[stage][name] = Impl(stage, name, fn, config_cls)
+        return fn
+    return deco
+
+
+def get(stage: str, name: str) -> Impl:
+    try:
+        return REGISTRY[stage][name]
+    except KeyError:
+        raise SystemExit(f"No {stage} implementation named {name!r}. Available: {sorted(REGISTRY[stage])}")

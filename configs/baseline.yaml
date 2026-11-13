@@ -1,0 +1,40 @@
+# Baseline: fixed-size chunks, local embeddings, vector search, no reranker, Claude answers.
+name: baseline
+description: Fixed 1200-char chunks, bge-small vectors, top-20 vector retrieval, Sonnet answers from top 10 chunks.
+
+data:
+  subset: dev
+
+load:
+  impl: corpus
+
+chunk:
+  impl: fixed
+  chunk_size: 1200
+  overlap: 150
+
+embed:
+  impl: sentence_transformers
+  model: BAAI/bge-small-en-v1.5
+
+index:
+  impl: duckdb
+  fts: true
+  vectors: true
+
+retrieve:
+  impl: vector
+  top_k: 20
+
+rerank:
+  impl: none
+
+generate:
+  impl: llm
+  provider: anthropic
+  model: claude-sonnet-5-5
+  context_chunks: 10
+
+evaluate:
+  impl: benchmark
+  judge: auto

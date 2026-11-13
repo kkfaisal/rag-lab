@@ -129,3 +129,34 @@ def test_script_dataset_end_to_end_bm25(tmp_path):
     stages = json.loads((paths.RUNS / run_id / "stages.json").read_text())
     assert [s["cached"] for s in stages[:4]] == [True] * 4                       # the experiment reused the build
     assert json.loads((paths.RUNS / run_id / "metrics.json").read_text())["overall"]["recall@1"] == 100.0
+
+
+def test_script_embed_and_rerank_nodes(tmp_path):
+    """Embed + rerank script nodes end to end with a toy bag-of-letters embedding (no model download)."""
+    import json
+    from rag_lab import paths, pipeline
+    (tmp_path / "a.txt").write_text("Refunds\nrefunds are issued within fourteen days")
+    (tmp_path / "b.txt").write_text("Shipping\norders ship from the leeds warehouse")
+    (tmp_path / "questions.jsonl").write_text(json.dumps({"question_id": "q1", "question": "leeds warehouse shipping", "expected_doc_ids": ["b.txt"]}) + "\n")
+    data.ingest("toy", tmp_path)
+    embed = ("def embed(texts):\n    return [[t.lower().count(c) + 0.01 for c in 'abcdefghijklmnopqrstuvwxyz'] for t in texts]\n")
+    rerank = "def rerank(question, chunks, top_n):\n    return list(reversed(chunks))[:top_n]\n"
+    cfg = {"name": "toy", "data": {"dataset": "toy", "subset": "all"}, "load": {"impl": "corpus"}, "chunk": {"impl": "fixed"},
+           "embed": {"impl": "python", "code": embed}, "index": {"impl": "duckdb", "fts": False},
+           "retrieve": {"impl": "vector", "top_k": 2}, "rerank": {"impl": "python", "code": rerank, "top_n": 2},
+           "generate": {"impl": "none"}, "evaluate": {"impl": "standard", "judge": False}}
+    run_dir = paths.RUNS / pipeline.run_config(cfg)
+    retrieved = json.loads((run_dir / "retrieval.jsonl").read_text())["chunks"]
+    reranked = json.loads((run_dir / "reranked.jsonl").read_text())["chunks"]
+    assert retrieved[0]["doc_id"] == "b.txt"                                   # the script's vectors drive the search
+    assert [c["chunk_id"] for c in reranked] == [c["chunk_id"] for c in reversed(retrieved)]
+
+
+def test_script_equivalents_match_builtins():
+    from rag_lab import scripting
+    from rag_lab.stages import chunk
+    doc = {"doc_id": "d", "source": "slack", "title": "eng", "text": "eng\n" + "\n".join(f"Sam{i}: message {i} " + "x" * 80 for i in range(30))}
+    for impl, cls in (("fixed", chunk.FixedConfig), ("slack_aware", chunk.SlackAwareConfig)):
+        p = {"chunk_size": 400, "overlap": 50}
+        eq = scripting.equivalent_script("chunk", impl, p)
+        assert chunk.preview("python", chunk.PythonChunkConfig(**eq), doc) == chunk.preview(impl, cls(**p), doc)

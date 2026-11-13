@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from ..registry import register
 from ..scripting import RETRIEVE_TEMPLATE, ScriptError, load_functions
 from .base import StageContext, write_jsonl
-from .embed import encode
+from .embed import encode, script_query_vector
 
 
 class TopKConfig(BaseModel):
@@ -59,7 +59,10 @@ class Search:
             self._emb = np.load(self.ctx.dirs["embed"] / "embeddings.npy")
             t = pq.read_table(self.ctx.dirs["chunk"] / "chunks.parquet", columns=["chunk_id", "doc_id", "text"])
             self._ids = (t.column("chunk_id").to_pylist(), t.column("doc_id").to_pylist(), t.column("text"))
-        qv = encode(meta["model"], [meta["query_prefix"] + query], meta["max_seq_length"])[0]
+        if meta.get("code"):                                  # index embedded by a script node
+            qv = script_query_vector(meta["code"], query)
+        else:
+            qv = encode(meta["model"], [meta["query_prefix"] + query], meta["max_seq_length"])[0]
         scores = self._emb @ qv                              # cosine similarity (vectors are normalised)
         k = min(k, len(scores))
         top = np.argpartition(-scores, k - 1)[:k]

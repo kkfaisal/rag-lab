@@ -59,6 +59,97 @@ def questions(path):
 '''
 
 
+EMBED_TEMPLATE = '''from sentence_transformers import SentenceTransformer
+
+MODEL = "BAAI/bge-small-en-v1.5"
+QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+_model = None
+
+
+def _load():
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(MODEL)
+    return _model
+
+
+def embed(texts):
+    """Return one vector per text (list of lists or a 2-D array). Called in batches of chunks."""
+    return _load().encode(texts, batch_size=64, normalize_embeddings=True, show_progress_bar=True)
+
+
+def embed_query(text):
+    """Optional: how a question is embedded at search time. Defaults to embed([text])[0]."""
+    return embed([QUERY_PREFIX + text])[0]
+'''
+
+RERANK_TEMPLATE = '''from sentence_transformers import CrossEncoder
+
+MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+_model = None
+
+
+def rerank(question, chunks, top_n):
+    """Reorder retrieved chunks for one question and return the best top_n.
+
+    chunks: list of {"chunk_id", "doc_id", "score", "text"}, best-first from retrieval.
+    """
+    global _model
+    if _model is None:
+        _model = CrossEncoder(MODEL)
+    scores = _model.predict([(question, c["text"]) for c in chunks])
+    ranked = sorted(zip(chunks, scores), key=lambda pair: -pair[1])[:top_n]
+    return [{**c, "score": float(s)} for c, s in ranked]
+'''
+
+
+def equivalent_script(stage: str, impl: str, params: dict) -> dict | None:
+    """Params for a `python` node that does the same as built-in `impl` with
+    `params`: the starting point when a user clicks "Edit as Python script".
+    Built from the real implementation source, so it can't drift from it."""
+    import inspect
+    p = params
+    if stage == "chunk" and impl in ("fixed", "slack_aware"):
+        from .stages import chunk
+        head = f"SIZE = {p.get('chunk_size', 1200)}\nOVERLAP = {p.get('overlap', 150)}\n"
+        title = 'doc["title"][:200] + "\\n" + c' if p.get("prepend_title", True) else "c"
+        if impl == "fixed":
+            code = (f"{head}\n\n{inspect.getsource(chunk.split_fixed)}\n\ndef chunk(doc):\n"
+                    f"    return [{title} for c in split_fixed(doc[\"body\"], SIZE, OVERLAP)]\n")
+        else:
+            code = (f"import re\n\n{head}ROOT_CHARS = {p.get('root_chars', 300)}\n"
+                    f"SPEAKER = re.compile(r\"{chunk.SPEAKER.pattern}\")\n\n\n"
+                    f"{inspect.getsource(chunk.split_fixed)}\n\n{inspect.getsource(chunk.split_slack_thread)}\n\n"
+                    "def chunk(doc):\n    if doc[\"source\"] == \"slack\":\n"
+                    "        pieces = split_slack_thread(doc[\"body\"], SIZE, OVERLAP, ROOT_CHARS)\n"
+                    "    else:\n        pieces = split_fixed(doc[\"body\"], SIZE, OVERLAP)\n"
+                    f"    return [{title} for c in pieces]\n")
+        return {"code": code, "prepend_title": False}
+    if stage == "retrieve" and impl in ("bm25", "vector", "hybrid"):
+        from .stages import retrieve
+        k = p.get("top_k", 20)
+        if impl == "hybrid":
+            code = (f"CANDIDATES = {p.get('candidates', 100)}\nRRF_K = {p.get('rrf_k', 60)}\n"
+                    f"BM25_WEIGHT = {p.get('bm25_weight', 1.0)}\nVECTOR_WEIGHT = {p.get('vector_weight', 1.0)}\n\n\n"
+                    f"{inspect.getsource(retrieve.rrf)}\n\ndef retrieve(question, search, top_k):\n"
+                    "    lexical = search.bm25(question, CANDIDATES)\n    dense = search.vector(question, CANDIDATES)\n"
+                    "    return rrf([(BM25_WEIGHT, lexical), (VECTOR_WEIGHT, dense)], RRF_K, top_k)\n")
+        else:
+            code = f"def retrieve(question, search, top_k):\n    return search.{impl}(question, top_k)\n"
+        return {"code": code, "top_k": k}
+    if stage == "embed" and impl == "sentence_transformers":
+        code = (EMBED_TEMPLATE.replace('"BAAI/bge-small-en-v1.5"', repr(p.get("model", "BAAI/bge-small-en-v1.5")).replace("'", '"'))
+                .replace("batch_size=64", f"batch_size={p.get('batch_size', 64)}"))
+        if "query_prefix" in p:
+            code = code.replace('"Represent this sentence for searching relevant passages: "', repr(p["query_prefix"]))
+        return {"code": code}
+    if stage == "rerank" and impl == "cross_encoder":
+        return {"code": RERANK_TEMPLATE.replace('"cross-encoder/ms-marco-MiniLM-L-6-v2"',
+                                                '"' + p.get("model", "cross-encoder/ms-marco-MiniLM-L-6-v2") + '"'),
+                "top_n": p.get("top_n", 10)}
+    return None
+
+
 class ScriptError(Exception):
     pass
 

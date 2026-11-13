@@ -4,7 +4,8 @@ import {
   type Connection, type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { Catalog, DatasetInfo, Graph, GraphKind, GraphNode } from '../api'
+import { send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode } from '../api'
+import CodeEditor from './CodeEditor'
 import ParamForm from './ParamForm'
 
 // Which stage may feed which.
@@ -153,6 +154,17 @@ export default function GraphEditor({ kind, graph, catalog, datasets, onChange, 
                 </select></div>
             </div>
           ) : info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} />}
+          {info?.source && sel.impl !== 'python' && (
+            <div style={{ marginTop: 12 }}>
+              <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+                <span className="small"><b>Python</b> <span className="muted">built-in, read-only · {info.source_file}</span></span>
+                {info.scriptable && (
+                  <button title="Replace this node with an editable script that does the same thing"
+                    onClick={() => send<Record<string, unknown>>('POST', '/api/script-equivalent', { stage: sel.stage, impl: sel.impl, params: sel.params })
+                      .then(params => update(sel.id, { impl: 'python', params }))}>Edit as Python script</button>)}
+              </div>
+              <CodeEditor key={sel.stage + sel.impl} value={info.source} readOnly height="260px" />
+            </div>)}
           {extra?.(sel, { ...graph, nodes: nodes.map(n => n.data.node), edges })}
         </>}
       </div>

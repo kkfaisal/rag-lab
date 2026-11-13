@@ -75,12 +75,23 @@ For UI development, run `uv run rag-lab serve` and `cd web && npm run dev` (Vite
 
 ### Script nodes
 
+Every node shows its Python. Built-in nodes show their implementation read-only with an
+**Edit as Python script** button, which swaps the node for an editable script that does exactly the
+same thing with the node's current settings — the starting point for your own variant. Chunk,
+embed, retrieve and rerank can be scripts (index and generate are built-in only for now).
+
 ```python
 def chunk(doc):                      # chunk node: doc has doc_id, source, title, text, body
     return [p for p in doc["body"].split("\n\n") if p.strip()]
 
 def retrieve(question, search, top_k):   # retrieve node: search.bm25(q, k) / search.vector(q, k)
     return search.bm25(question, top_k)
+
+def embed(texts):                    # embed node: one vector per text; optional embed_query(text)
+    return my_model.encode(texts)
+
+def rerank(question, chunks, top_n):     # rerank node: chunks have chunk_id, doc_id, score, text
+    return sorted(chunks, key=lambda c: -len(c["text"]))[:top_n]
 
 def extract(path):                   # dataset extractor: path is the dataset's upload folder
     yield {"doc_id": "a", "text": "...", "title": "...", "source": "..."}
@@ -101,10 +112,10 @@ load → chunk → embed → index → retrieve → rerank → generate → eval
 |----------|----------------------------------------------------|--------------------------------|
 | load     | `corpus` (dataset + snapshot + subset)             | docs.parquet                   |
 | chunk    | `fixed`, `slack_aware` (whole messages, thread root repeated), `python` (your script) | chunks.parquet |
-| embed    | `sentence_transformers` (default `BAAI/bge-small-en-v1.5`), `none` | embeddings.npy |
+| embed    | `sentence_transformers` (default `BAAI/bge-small-en-v1.5`), `python`, `none` | embeddings.npy |
 | index    | `duckdb` (BM25 via DuckDB FTS; vectors searched with numpy) | index.duckdb          |
 | retrieve | `bm25`, `vector`, `hybrid` (Reciprocal Rank Fusion), `python` (your script) | retrieval.jsonl |
-| rerank   | `none`, `cross_encoder`                            | reranked.jsonl                 |
+| rerank   | `none`, `cross_encoder`, `python`                  | reranked.jsonl                 |
 | generate | `llm` (provider interface; `anthropic` first), `none` | answers.jsonl, generations.jsonl |
 | evaluate | `standard` (free recall metrics + optional LLM judge) | metrics.json, per_question.jsonl |
 

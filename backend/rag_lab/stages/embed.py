@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 
 from ..registry import NoConfig, register
+from ..scripting import EMBED_TEMPLATE, ScriptError, load_functions
 from .base import StageContext
 
 SAVE_EVERY = 10_000
@@ -49,21 +50,18 @@ def encode(model_name: str, texts: list[str], max_seq_length: int = 512, device=
                     show_progress_bar=progress, convert_to_numpy=True).astype(np.float32)
 
 
-@register("embed", "sentence_transformers", SentenceTransformersConfig)
-def sentence_transformers(cfg: SentenceTransformersConfig, ctx: StageContext) -> dict:
-    """Embed only chunk texts this model hasn't seen (keyed by text hash), in
+def _embed_with_store(ctx: StageContext, dim: int, encode_fn, label: str, meta: dict) -> dict:
+    """Embed only chunk texts this embedder hasn't seen (keyed by text hash), in
     batches that are saved as they finish — an interrupted job keeps its progress."""
     chunks = pq.read_table(ctx.dirs["chunk"] / "chunks.parquet", columns=["text_hash", "text"])
     store = ctx.store("embed")
-    model = load_model(cfg.model, cfg.max_seq_length, cfg.device)
-    dim = (getattr(model, "get_embedding_dimension", None) or model.get_sentence_embedding_dimension)()
     store.execute(f"CREATE TABLE IF NOT EXISTS vecs(text_hash VARCHAR PRIMARY KEY, vec FLOAT[{dim}])")
     store.register("chunks", chunks.append_column("ord", pa.array(range(chunks.num_rows))))
     todo = store.execute("SELECT text_hash, any_value(text) FROM chunks ANTI JOIN vecs USING (text_hash) GROUP BY 1").fetchall()
-    ctx.log(f"{chunks.num_rows:,} chunks: {len(todo):,} to embed with {cfg.model}, {chunks.num_rows - len(todo):,} already in store")
+    ctx.log(f"{chunks.num_rows:,} chunks: {len(todo):,} to embed with {label}, {chunks.num_rows - len(todo):,} already in store")
     for start in range(0, len(todo), SAVE_EVERY):
         part = todo[start:start + SAVE_EVERY]
-        vecs = encode(cfg.model, [t for _, t in part], cfg.max_seq_length, cfg.device, cfg.batch_size, progress=True)
+        vecs = encode_fn([t for _, t in part])
         store.register("new_vecs", pa.table({"text_hash": [h for h, _ in part],
                                              "vec": pa.FixedSizeListArray.from_arrays(pa.array(vecs.ravel()), dim)}))
         store.execute("INSERT OR IGNORE INTO vecs SELECT * FROM new_vecs")
@@ -72,8 +70,55 @@ def sentence_transformers(cfg: SentenceTransformersConfig, ctx: StageContext) ->
     store.close()
     emb = vec_col.combine_chunks().values.to_numpy(zero_copy_only=False).reshape(-1, dim).astype(np.float32)
     np.save(ctx.out / "embeddings.npy", emb)
-    return {"n": int(emb.shape[0]), "dim": dim, "embedded": len(todo), "reused": chunks.num_rows - len(todo),
-            "model": cfg.model, "query_prefix": cfg.query_prefix, "max_seq_length": cfg.max_seq_length}
+    return {"n": int(emb.shape[0]), "dim": dim, "embedded": len(todo), "reused": chunks.num_rows - len(todo), **meta}
+
+
+@register("embed", "sentence_transformers", SentenceTransformersConfig)
+def sentence_transformers(cfg: SentenceTransformersConfig, ctx: StageContext) -> dict:
+    """A local sentence-transformers model. Vectors are cached per chunk text, so only new text is embedded."""
+    model = load_model(cfg.model, cfg.max_seq_length, cfg.device)
+    dim = (getattr(model, "get_embedding_dimension", None) or model.get_sentence_embedding_dimension)()
+    return _embed_with_store(
+        ctx, dim, lambda texts: encode(cfg.model, texts, cfg.max_seq_length, cfg.device, cfg.batch_size, progress=True), cfg.model,
+        {"model": cfg.model, "query_prefix": cfg.query_prefix, "max_seq_length": cfg.max_seq_length})
+
+
+class PythonEmbedConfig(BaseModel):
+    model_config = {"extra": "forbid"}
+    code: str = EMBED_TEMPLATE       # must define embed(texts); may define embed_query(text)
+
+
+def _normalised(vectors) -> np.ndarray:
+    v = np.asarray(vectors, dtype=np.float32)
+    if v.ndim != 2:
+        raise ScriptError("embed(texts) must return one vector per text (a 2-D array or list of lists)")
+    return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
+
+
+def script_query_vector(code: str, text: str) -> np.ndarray:
+    """Embed one question with an embed script (used by vector search)."""
+    fns = _script_fns(code)
+    vec = fns["embed_query"](text) if "embed_query" in fns else fns["embed"]([text])[0]
+    return _normalised([np.asarray(vec, dtype=np.float32)])[0]
+
+
+@lru_cache(maxsize=4)
+def _script_fns(code: str) -> dict:
+    return load_functions(code, "embed", ("embed_query",))
+
+
+@register("embed", "python", PythonEmbedConfig)
+def python_embedder(cfg: PythonEmbedConfig, ctx: StageContext) -> dict:
+    """Your own embed(texts) function, edited in the UI (any model or API)."""
+    fns = _script_fns(cfg.code)
+
+    def encode_fn(texts):
+        vecs = _normalised(fns["embed"](texts))
+        if len(vecs) != len(texts):
+            raise ScriptError(f"embed() returned {len(vecs)} vectors for {len(texts)} texts")
+        return vecs
+    dim = int(encode_fn(["dimension probe"]).shape[1])
+    return _embed_with_store(ctx, dim, encode_fn, "your script", {"code": cfg.code})
 
 
 @register("embed", "none", NoConfig)

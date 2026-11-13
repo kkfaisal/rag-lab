@@ -100,7 +100,7 @@ export interface Graph { id?: string; name: string; description: string; nodes: 
 export type GraphKind = 'pipeline' | 'retriever'
 
 export interface SchemaProp { type?: string; title?: string; default?: unknown; anyOf?: { type?: string }[]; items?: { type?: string }; description?: string }
-export interface ImplInfo { impl: string; doc: string; schema: { properties?: Record<string, SchemaProp> }; defaults: Record<string, unknown> }
+export interface ImplInfo { impl: string; doc: string; source?: string; source_file?: string; scriptable?: boolean; schema: { properties?: Record<string, SchemaProp> }; defaults: Record<string, unknown> }
 export interface Catalog { stages: Record<string, ImplInfo[]>; kinds: Record<GraphKind, string[]>; templates: { extract: string }; has_api_key: boolean; bench_ready: boolean }
 
 export interface IndexStatus {

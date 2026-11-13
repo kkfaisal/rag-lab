@@ -4,10 +4,12 @@ Reads are served directly; anything slow or that writes to DuckDB (ingest, index
 builds, experiments) is queued as a background job (jobs.py).
 """
 
+import inspect
 import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 import zipfile
@@ -221,10 +223,23 @@ def catalog():
         if stage in ("load", "evaluate"):
             continue
         stages[stage] = [{"impl": name, "doc": (impl.fn.__doc__ or "").strip().split("\n\n")[0],
-                          "schema": impl.config_cls.model_json_schema(), "defaults": impl.config_cls().model_dump()}
+                          "schema": impl.config_cls.model_json_schema(), "defaults": impl.config_cls().model_dump(),
+                          "source": inspect.getsource(sys.modules[impl.fn.__module__]),      # the module that implements it
+                          "source_file": f"backend/rag_lab/stages/{impl.fn.__module__.rsplit('.', 1)[-1]}.py",
+                          "scriptable": name != "python" and "python" in impls
+                                        and scripting.equivalent_script(stage, name, {}) is not None}
                          for name, impl in sorted(impls.items())]
     return {"stages": stages, "kinds": workspace.KINDS, "templates": {"extract": scripting.EXTRACT_TEMPLATE},
             "has_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")), "bench_ready": bench.is_ready()}
+
+
+@app.post("/api/script-equivalent")
+def script_equivalent(body: dict = Body(...)):
+    """Params for a python node equivalent to a built-in node: {"stage", "impl", "params"}."""
+    out = scripting.equivalent_script(body["stage"], body["impl"], body.get("params") or {})
+    if out is None:
+        raise HTTPException(404, "no script equivalent for this node")
+    return out
 
 
 # ----------------------------------------------------------------------------- playground: graphs

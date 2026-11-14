@@ -7,7 +7,6 @@ builds, experiments) is queued as a background job (jobs.py).
 import inspect
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -24,6 +23,7 @@ from . import bench, data, jobs, paths, scripting, tracking, workspace
 from .targets import TARGETS, Manifest, TargetError, open_target
 
 load_dotenv(paths.ROOT / ".env")
+data.migrate_layout()
 app = FastAPI(title="rag-lab")
 jobs.start()
 
@@ -70,13 +70,23 @@ def _question_texts(dataset: str) -> dict[str, str]:
 
 @app.get("/api/datasets")
 def datasets():
+    """Loaded datasets (document store), each with its folder's summary."""
     if not paths.CORPUS_DB.exists():
         return []
     con = _corpus()
     try:
-        return data.dataset_info(con)
+        info = data.dataset_info(con)
     finally:
         con.close()
+    for d in info:
+        d["folder"] = data.folder_summary(paths.RAW if d["name"] == data.BENCH else paths.DATASETS / d["name"])
+    return info
+
+
+@app.get("/api/folders")
+def folders():
+    """Every folder under data/datasets/, loaded or not."""
+    return data.list_folders()
 
 
 def _runs(kind: str) -> list[dict]:
@@ -429,68 +439,152 @@ def matrix(dataset: str | None = None):
 
 # ----------------------------------------------------------------------------- datasets
 
-def _upload_dir(name: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", name):
-        raise HTTPException(400, "dataset names may only contain letters, digits, _ and -")
-    return paths.UPLOADS / name
+def _dataset_dir(name: str) -> Path:
+    try:
+        return paths.RAW if name == data.BENCH else data.dataset_dir(name)
+    except SystemExit as e:
+        raise HTTPException(400, str(e))
 
 
-@app.get("/api/datasets/{name}/files")
-def dataset_files(name: str):
-    d = _upload_dir(name)
-    files = [f for f in sorted(d.rglob("*")) if f.is_file()] if d.exists() else []
-    return {"path": str(d), "count": len(files), "has_questions": (d / "questions.jsonl").exists(),
-            "files": [{"path": f.relative_to(d).as_posix(), "size": f.stat().st_size} for f in files[:500]]}
+def _inside(root: Path, rel: str) -> Path:
+    """Resolve a path from the browser inside a dataset folder; refuse anything outside it."""
+    target = (root / (rel or "")).resolve()
+    if target != root.resolve() and root.resolve() not in target.parents:
+        raise HTTPException(400, f"path {rel!r} is outside the dataset folder")
+    return target
+
+
+@app.get("/api/datasets/{name}/tree")
+def dataset_tree(name: str, path: str = ""):
+    """One directory level of a dataset folder, for the file explorer."""
+    root = _dataset_dir(name)
+    d = _inside(root, path)
+    if not d.is_dir():
+        return {"path": path, "entries": [], "exists": False}
+    entries = []
+    for f in sorted(d.iterdir(), key=lambda f: (f.is_file(), f.name.lower())):
+        if f.name.startswith("."):
+            continue
+        st = f.stat()
+        entry = {"name": f.name, "path": f.relative_to(root).as_posix(), "dir": f.is_dir(),
+                 "modified": time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))}
+        if f.is_dir():
+            kids = [k for k in f.rglob("*") if k.is_file()]
+            entry |= {"files": len(kids), "size": sum(k.stat().st_size for k in kids)}
+        else:
+            entry["size"] = st.st_size
+        entries.append(entry)
+    return {"path": path, "exists": True, "root": str(root), "entries": entries}
+
+
+@app.get("/api/datasets/{name}/file")
+def dataset_file(name: str, path: str, max_bytes: int = 65536):
+    """Preview a file: the start of a text file, or the member list of a zip."""
+    f = _inside(_dataset_dir(name), path)
+    if not f.is_file():
+        raise HTTPException(404, "file not found")
+    size = f.stat().st_size
+    if f.suffix == ".zip":
+        with zipfile.ZipFile(f) as z:
+            infos = [i for i in z.infolist() if not i.is_dir()]
+            members = [{"name": i.filename, "size": i.file_size} for i in infos[:300]]
+            return {"kind": "zip", "size": size, "members": members, "n_members": len(infos)}
+    with open(f, "rb") as fh:
+        head = fh.read(max_bytes)
+    if b"\x00" in head[:4096]:
+        return {"kind": "binary", "size": size}
+    return {"kind": "text", "size": size, "text": head.decode(errors="replace"), "truncated": size > max_bytes}
 
 
 @app.post("/api/datasets/{name}/upload")
-def upload(name: str, files: list[UploadFile] = File(...), questions: bool = False):
-    """Save uploaded files under data/uploads/<name>/. A .zip is unpacked in place.
-    questions=true stores the (single) file as questions.jsonl."""
-    d = _upload_dir(name)
+def upload(name: str, files: list[UploadFile] = File(...), path: str = ""):
+    """Save uploaded files into the dataset folder (under `path`). A .zip is unpacked in place."""
+    root = _dataset_dir(name)
+    d = _inside(root, path)
     d.mkdir(parents=True, exist_ok=True)
     saved = 0
     for up in files:
-        rel = "questions.jsonl" if questions else Path(up.filename or "file").as_posix().lstrip("/")
-        target = (d / rel).resolve()
-        if d.resolve() not in target.parents:
-            raise HTTPException(400, f"bad file name {up.filename!r}")
+        rel = Path(up.filename or "file").as_posix().lstrip("/")
+        target = _inside(d, rel)
         if rel.endswith(".zip"):
             with zipfile.ZipFile(up.file) as z:
                 for member in z.namelist():
-                    out = (d / member).resolve()
-                    if member.endswith("/") or d.resolve() not in out.parents:
+                    if member.endswith("/") or member.startswith("__MACOSX"):
                         continue
+                    out = _inside(d, member)
                     out.parent.mkdir(parents=True, exist_ok=True)
                     out.write_bytes(z.read(member))
                     saved += 1
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "wb") as f:
-                shutil.copyfileobj(up.file, f)
+            with open(target, "wb") as fh:
+                shutil.copyfileobj(up.file, fh)
             saved += 1
-    return {"saved": saved, **dataset_files(name)}
+    return {"saved": saved}
 
 
-@app.delete("/api/datasets/{name}/files")
+@app.delete("/api/datasets/{name}/file")
 def delete_file(name: str, path: str):
-    d = _upload_dir(name)
-    target = (d / path).resolve()
-    if d.resolve() in target.parents and target.is_file():
-        target.unlink()
-    return dataset_files(name)
+    root = _dataset_dir(name)
+    f = _inside(root, path)
+    if f == root.resolve():
+        raise HTTPException(400, "can't delete the dataset folder itself here")
+    if f.is_dir():
+        shutil.rmtree(f)
+    elif f.is_file():
+        f.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/datasets/{name}/folder")
+def create_folder(name: str):
+    """Create an empty dataset folder to put files in."""
+    d = _dataset_dir(name)
+    d.mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "path": str(d)}
+
+
+@app.get("/api/datasets/{name}/extractor")
+def get_extractor(name: str):
+    f = _dataset_dir(name) / data.EXTRACTOR_FILE
+    return {"code": f.read_text() if f.is_file() else scripting.EXTRACT_TEMPLATE, "saved": f.is_file()}
+
+
+@app.get("/api/datasets/{name}/metrics")
+def dataset_metrics(name: str):
+    if not paths.CORPUS_DB.exists():
+        raise HTTPException(404, "nothing loaded yet")
+    con = _corpus()
+    try:
+        return data.dataset_metrics(con, name)
+    except SystemExit as e:
+        raise HTTPException(404, str(e))
+    finally:
+        con.close()
 
 
 @app.post("/api/datasets/{name}/ingest")
 def ingest_dataset(name: str, body: dict = Body(default={})):
-    """Queue a dataset ingest: {"source": upload|folder|enterprise_rag_bench|script, "params": {...}, "sync"?}.
-    Creates a new snapshot holding only what changed. Benchmark questions are required."""
-    _upload_dir(name)
-    source = body.get("source", "upload")
+    """Queue a job that fills and/or loads a dataset folder: {"source": enterprise_rag_bench | extract | folder,
+    "params": {"code"?}, "sync"?}. Loading records a snapshot holding only what changed; questions are required."""
+    _dataset_dir(name)
+    source = body.get("source", "folder")
     if source not in data.SOURCES:
         raise HTTPException(400, f"source must be one of {sorted(data.SOURCES)}")
-    return jobs.submit("dataset", f"Ingest dataset {name} ({source})",
+    if source == "extract":
+        check = scripting.check("extract", (body.get("params") or {}).get("code", ""))
+        if not check["ok"]:
+            raise HTTPException(400, check["message"])
+    title = {"enterprise_rag_bench": "Download + load", "extract": "Extract + load", "folder": "Load folder"}[source]
+    return jobs.submit("dataset", f"{title}: {name}",
                        {"dataset": name, "source": source, "params": body.get("params") or {}, "sync": bool(body.get("sync"))})
+
+
+@app.delete("/api/datasets/{name}")
+def remove_dataset(name: str):
+    """Queue removal of a dataset from the document store. Its folder is kept."""
+    _dataset_dir(name)
+    return jobs.submit("dataset", f"Remove dataset {name}", {"dataset": name, "action": "remove"})
 
 
 @app.get("/api/datasets/{name}/docs")

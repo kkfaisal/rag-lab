@@ -5,7 +5,6 @@ data
 cache
 runs
 workspace
-import
 web/node_modules
 web/dist
 **/__pycache__

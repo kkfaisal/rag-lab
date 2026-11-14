@@ -1,4 +1,4 @@
-"""Background jobs started from the UI: index builds, experiments, dataset ingests.
+"""Background jobs started from the UI: dataset loads, ingestion runs, benchmarks.
 
 Jobs run one at a time, each in its own subprocess (`python -m rag_lab.worker`),
 so a crash or a cancelled job can't take the API down, model memory is released
@@ -60,7 +60,7 @@ def list_jobs(limit: int = 50) -> list[dict]:
 
 
 def submit(kind: str, title: str, spec: dict) -> dict:
-    """kind: "build" | "experiment" | "ingest". spec is what rag_lab.worker needs."""
+    """kind: "dataset" | "ingest" | "benchmark". spec is what rag_lab.worker needs."""
     start()
     job = {"id": f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}", "kind": kind, "title": title,
            "spec": spec, "status": "queued", "created_at": _now()}
@@ -91,7 +91,7 @@ def _loop() -> None:
         job.update(status="running", started_at=_now())
         _save(job)
         with open(paths.JOBS / f"{job_id}.log", "w") as log:
-            proc = subprocess.Popen([sys.executable, "-m", "rag_lab.worker", str(_file(job_id))],
+            proc = subprocess.Popen([sys.executable, "-u", "-m", "rag_lab.worker", str(_file(job_id))],   # -u: log lines in order
                                     stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=paths.ROOT)
             _procs[job_id] = proc
             code = proc.wait()

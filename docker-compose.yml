@@ -35,7 +35,6 @@ services:
       - ./runs:/app/runs
       - ./workspace:/app/workspace
       - ./.bench:/app/.bench
-      - ./import:/app/import            # folders for the "Local folder" data source (path: import/<name>)
       - hf-cache:/hf-cache              # downloaded embedding / reranker models
     depends_on:
       postgres: { condition: service_healthy }

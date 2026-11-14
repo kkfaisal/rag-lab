@@ -105,14 +105,33 @@ def test_incremental_dataset_snapshots(tmp_path):
     assert old.endswith("second doc")                                         # old snapshot still reconstructable
 
 
-def test_script_data_source(tmp_path):
-    (tmp_path / "rows.csv").write_text("id,body\na,Refunds are issued within 14 days\nb,Orders ship from the Leeds warehouse\n")
-    code = ("import csv\nfrom pathlib import Path\n"
-            "def extract(path):\n    for r in csv.DictReader(open(Path(path) / 'rows.csv')):\n        yield {'doc_id': r['id'], 'text': r['body']}\n"
-            "def questions(path):\n    yield {'question_id': 'q1', 'question': 'where do orders ship from', 'expected_doc_ids': ['b']}\n")
-    assert data.ingest_source("csv", "script", {"path": str(tmp_path), "code": code}) == 1
+def test_extractor_fills_folder_then_loads_it():
+    # An extractor writes files into data/datasets/<name>/; the folder is then loaded.
+    code = ("import json\nfrom pathlib import Path\n"
+            "def download(folder):\n"
+            "    f = Path(folder)\n"
+            "    (f / 'docs.jsonl').write_text(json.dumps({'id': 'a', 'text': 'Refunds take 14 days'}) + '\\n'"
+            " + json.dumps({'id': 'b', 'text': 'Orders ship from Leeds'}) + '\\n')\n"
+            "    (f / 'questions.jsonl').write_text(json.dumps({'question_id': 'q1', 'question': 'where do orders ship from',"
+            " 'expected_doc_ids': ['b', 'missing']}) + '\\n')\n")
+    assert data.ingest_source("ex", "extract", {"code": code}) == 1
+    folder = data.dataset_dir("ex")
+    assert (folder / data.EXTRACTOR_FILE).read_text() == code                  # the script is kept with its data
+    summary = data.folder_summary(folder)
+    assert summary["has_questions"] and summary["has_extractor"] and summary["n_files"] == 3
+
+    (folder / "notes.md").write_text("# Support\nopen on weekdays")           # files added by hand ...
+    assert data.ingest_source("ex", "folder", {}) == 2                          # ... are picked up on reload
     con = data.connect(read_only=True)
-    assert data.require_ready(con, "csv") == "script"
+    m = data.dataset_metrics(con, "ex")
+    con.close()
+    assert m["docs"]["n"] == 3 and m["questions"]["gold_doc_ids"] == 2 and m["questions"]["gold_docs_found"] == 1
+
+    data.remove_dataset("ex")
+    con = data.connect(read_only=True)
+    assert con.execute("SELECT count(*) FROM doc_versions WHERE dataset='ex'").fetchone()[0] == 0
+    con.close()
+    assert folder.is_dir()                                                     # removing a dataset keeps its folder
 
 
 # ---- targets: append / overwrite, and every testable type behaves the same

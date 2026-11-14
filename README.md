@@ -50,8 +50,8 @@ running; *Add target* creates a target already pointed at it.
 Ports are published on 127.0.0.1 only. Postgres is on 5433 so it doesn't clash with a Postgres you
 already run. `data/`, `cache/`, `runs/`, `workspace/` and `.bench/` are bind-mounted, so the container
 and a local `uv run rag-lab serve` share the same experiments (don't run both at once). Put folders
-for the *Local folder* source in `import/` and refer to them as `import/<name>`. The image uses
-CPU-only PyTorch.
+the image uses CPU-only PyTorch. Dataset folders are under `data/datasets/`, so you can drop
+files there from the host.
 
 To run only the databases and rag-lab itself with uv: `docker compose up -d postgres qdrant`.
 
@@ -69,8 +69,8 @@ uv run rag-lab serve                      # http://127.0.0.1:8000
 
 Then, in the browser:
 
-1. **Datasets → New dataset.** Pick a source (file upload, local folder, EnterpriseRAG-Bench, or a
-   Python script), supply the questions, ingest.
+1. **Datasets → New dataset.** Download EnterpriseRAG-Bench, run a Python extractor (the template
+   fetches BEIR SciFact), or create an empty folder and add files. Then load it.
 2. **Targets.** A local store is created for you; add Qdrant, OpenSearch or a script target if you like.
 3. **Ingestion.** Open the example pipeline, check the source and target nodes, press **Run ingestion**.
 4. **Retrieval.** Open an example pipeline, try a query, press **Run benchmark**.
@@ -89,14 +89,37 @@ For UI development, run `uv run rag-lab serve` and `cd web && npm run dev` (Vite
 
 ## Datasets
 
-Built-in sources:
+**A dataset is a folder**: `data/datasets/<name>/` holding documents and a `questions.jsonl`.
 
-- **File upload**: `.txt`, `.md`, `.jsonl` files or a `.zip` of them, plus `questions.jsonl`.
-- **Local folder**: the same, read from a path on this machine.
-- **EnterpriseRAG-Bench** ([repo](https://github.com/onyx-dot-app/EnterpriseRAG-Bench), MIT): one
-  click downloads the release (1.26 GB), loads ~512k synthetic company documents with 500 questions
-  in 10 categories, and builds a `dev` subset (100 questions, their gold documents, 20k distractors).
-- **Python script**: `extract(path)` yields documents, `questions(path)` yields questions.
+```
+data/datasets/
+  enterprise_rag_bench/   all_documents.zip, questions.jsonl         (built-in download)
+  scifact/                extract.py, docs.jsonl, questions.jsonl    (Python extractor)
+  my_docs/                handbook/*.md, tickets.jsonl, questions.jsonl   (your own files)
+```
+
+Documents can be `.txt` / `.md` files (doc id = path inside the folder) or `.jsonl` lines
+`{"id", "text", "title"?, "source"?, "metadata"?}`. A folder gets filled in one of three ways:
+
+- **EnterpriseRAG-Bench** (built-in, [repo](https://github.com/onyx-dot-app/EnterpriseRAG-Bench), MIT):
+  downloads the release (1.26 GB), loads ~512k synthetic company documents with 500 questions in 10
+  categories, and builds a `dev` subset (100 questions, their gold documents, 20k distractors).
+- **Python extractor**: a script with `download(folder)` that fetches data, e.g. a public benchmark,
+  and writes it into the folder. It is saved there as `extract.py`, so it can be edited and re-run.
+  The template downloads [BEIR](https://github.com/beir-cellar/beir) SciFact (5k abstracts, 300
+  questions with gold documents) from Hugging Face; change `DATASET` for other BEIR sets.
+- **Your own files**: create the folder (in the UI, or just `mkdir`), then copy or upload files.
+
+**Loading** a folder reads it into the document store (`data/corpus.duckdb`). Each load compares the
+documents with the dataset's current state by content hash and stores only the difference as a new
+snapshot, so older snapshots stay reconstructable. A folder without questions is refused.
+
+Each dataset's page has:
+- **Overview**: document count, approximate tokens, length percentiles and a length histogram, source
+  types, question categories, how many questions have gold documents or answers, and how many gold
+  document ids actually exist in the documents (missing ones cap recall).
+- **Files**: browse, preview (text, and zip contents), upload and delete files.
+- **Questions**, **Snapshots**, and **Extractor** (when the folder has `extract.py`).
 
 Questions file, one JSON object per line:
 
@@ -104,11 +127,15 @@ Questions file, one JSON object per line:
 {"question_id": "q1", "question": "…", "expected_doc_ids": ["…"], "gold_answer": "…", "category": "…"}
 ```
 
-`expected_doc_ids` drive the recall metrics; `gold_answer` enables answer judging. A dataset without
-questions is refused at ingest.
+`expected_doc_ids` drive the recall metrics; `gold_answer` enables answer judging.
 
-Each ingest compares incoming documents with the dataset's current state by content hash and stores
-only the difference as a new snapshot, so old snapshots stay reconstructable.
+From the command line: `uv run rag-lab data add <name>` loads `data/datasets/<name>/`;
+`--source extract` runs its `extract.py` first.
+
+**From folder to target.** An ingestion pipeline reads a loaded dataset, chunks it, and writes to a
+target, either through an embed node (vector search) or straight from the chunk node (keyword /
+BM25 only, no embedding). One pipeline can branch into both. On SciFact (300 questions, 1,200-char
+chunks), vector search (`bge-small`) got recall@10 82.8 and BM25 got 81.8.
 
 ## Targets, append and overwrite
 
@@ -237,8 +264,8 @@ Pipelines and targets you define are JSON files under `workspace/`.
 ```
 backend/rag_lab/
   cli.py          typer CLI
-  datasets/       dataset adapters (enterprise_rag_bench, folder, script)
-  data.py         versioned document store, snapshots, subsets, built-in sources
+  datasets/       readers for dataset folders (enterprise_rag_bench, folder)
+  data.py         dataset folders, extractors, versioned document store, snapshots, subsets, metrics
   targets/        target types (local, pgvector, sql, qdrant, opensearch, elasticsearch, script) + manifest
   services.py     the docker-compose database services: URLs and reachability
   stages/         load, chunk, embed, retrieve, rerank, generate, evaluate

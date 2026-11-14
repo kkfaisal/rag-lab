@@ -1,4 +1,5 @@
-"""User-written Python for script nodes (extract / chunk / retrieve).
+"""User-written Python for script nodes (chunk / embed / retrieve / rerank), dataset
+extractors and script targets.
 
 The code is plain Python, stored inside the node's config, so it is hashed for
 caching and saved with every run like any other parameter. It runs with full
@@ -32,30 +33,65 @@ RETRIEVE_TEMPLATE = '''def retrieve(question, search, top_k):
     return hits
 '''
 
-EXTRACT_TEMPLATE = '''import json
+EXTRACT_TEMPLATE = '''"""Extractor: download a public dataset into this dataset's folder.
+
+rag-lab calls download(folder) and then loads the folder. Write the documents as
+.txt / .md files or .jsonl lines ({"id", "text", "title"?, "source"?}) and the
+benchmark questions as questions.jsonl:
+  {"question_id", "question", "expected_doc_ids": [...], "gold_answer"?, "category"?}
+
+This example fetches a BEIR benchmark (https://github.com/beir-cellar/beir) from its
+Hugging Face mirror. Other small ones: nfcorpus, fiqa, arguana, scidocs, trec-covid.
+"""
+import csv
+import io
+import json
+from collections import defaultdict
 from pathlib import Path
 
+import httpx
+import pyarrow.parquet as pq
 
-def extract(path):
-    """Yield one dict per document found under `path` (the dataset's upload folder).
-
-    Required keys: doc_id (stable across re-ingests), text.
-    Optional: title, source, metadata (dict), updated_at.
-    """
-    for f in sorted(Path(path).rglob("*")):
-        if f.suffix in {".txt", ".md"}:
-            text = f.read_text(errors="replace")
-            yield {"doc_id": f.relative_to(path).as_posix(), "text": text,
-                   "title": text.split("\\n", 1)[0].strip(), "source": "files"}
+DATASET = "scifact"          # ~5k scientific abstracts, 300 test questions with gold documents
+SPLIT = "test"
+HUB = "https://huggingface.co"
 
 
-def questions(path):
-    """Optional: yield {"question_id", "question", "expected_doc_ids", "gold_answer", "category"}."""
-    q = Path(path) / "questions.jsonl"
-    if q.exists():
-        for line in open(q):
-            if line.strip():
-                yield json.loads(line)
+def _get(url):
+    r = httpx.get(url, follow_redirects=True, timeout=300)
+    r.raise_for_status()
+    return r
+
+
+def _rows(repo, part):
+    """All rows of the parquet files in one folder of a Hugging Face dataset repo."""
+    for f in _get(f"{HUB}/api/datasets/{repo}/tree/main/{part}").json():
+        if f["path"].endswith(".parquet"):
+            print(f"downloading {repo}/{f['path']}")
+            yield from pq.read_table(io.BytesIO(_get(f"{HUB}/datasets/{repo}/resolve/main/{f['path']}").content)).to_pylist()
+
+
+def download(folder):
+    folder = Path(folder)
+    with open(folder / "docs.jsonl", "w") as out:
+        for d in _rows(f"BeIR/{DATASET}", "corpus"):
+            out.write(json.dumps({"id": str(d["_id"]), "title": d.get("title") or str(d["_id"]),
+                                  "text": ((d.get("title") or "") + "\\n" + d["text"]).strip(), "source": DATASET}) + "\\n")
+
+    gold = defaultdict(list)                       # qrels: query id -> relevant document ids
+    qrels = _get(f"{HUB}/datasets/BeIR/{DATASET}-qrels/resolve/main/{SPLIT}.tsv").text
+    for row in csv.DictReader(io.StringIO(qrels), delimiter="\\t"):
+        if int(row["score"]) > 0:
+            gold[str(row["query-id"])].append(str(row["corpus-id"]))
+
+    n = 0
+    with open(folder / "questions.jsonl", "w") as out:
+        for q in _rows(f"BeIR/{DATASET}", "queries"):
+            if str(q["_id"]) in gold:
+                out.write(json.dumps({"question_id": str(q["_id"]), "question": q["text"],
+                                      "expected_doc_ids": gold[str(q["_id"])], "category": DATASET}) + "\\n")
+                n += 1
+    print(f"wrote docs.jsonl and questions.jsonl ({n} questions)")
 '''
 
 
@@ -229,7 +265,7 @@ CONTRACTS = {
     "embed": {"template": EMBED_TEMPLATE, "required": ["embed"], "optional": ["embed_query"]},
     "retrieve": {"template": RETRIEVE_TEMPLATE, "required": ["retrieve"], "optional": []},
     "rerank": {"template": RERANK_TEMPLATE, "required": ["rerank"], "optional": []},
-    "extract": {"template": EXTRACT_TEMPLATE, "required": ["extract"], "optional": ["questions"]},
+    "extract": {"template": EXTRACT_TEMPLATE, "required": ["download"], "optional": []},
     "target": {"template": TARGET_TEMPLATE, "required": ["clear", "delete_docs", "add", "search"], "optional": ["finish", "count"]},
 }
 

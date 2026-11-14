@@ -42,6 +42,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/datasets" replace />} />
           <Route path="/datasets" element={<Datasets />} />
+          <Route path="/datasets/:name" element={<Datasets />} />
           <Route path="/targets/:id?" element={<Targets />} />
           <Route path="/ingestion/:id?" element={<GraphPage key="ingestion" kind="ingestion" />} />
           <Route path="/retrieval/:id?" element={<GraphPage key="retrieval" kind="retrieval" />} />

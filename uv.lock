@@ -1195,6 +1195,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux'" },
+    { name = "truststore" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -1225,6 +1226,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.4" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.4", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "truststore", specifier = ">=0.10" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

@@ -202,35 +202,130 @@ def _upsert_questions(con, dataset: str, qs: list[dict]) -> None:
     print(f"  {len(qs)} questions")
 
 
-# Built-in data sources. Each maps to a dataset adapter plus where its files live.
+# A dataset is a folder under data/datasets/<name>/ holding documents (.txt, .md,
+# .jsonl) and a questions.jsonl. Folders get there three ways: EnterpriseRAG-Bench's
+# built-in download, a Python extractor that downloads public data into the folder,
+# or by putting files there yourself. Loading a folder reads it into the document
+# store as a new snapshot (only what changed).
 SOURCES = {
-    "upload": "Files uploaded in the browser (.txt, .md, .jsonl, or a .zip of them) plus questions.jsonl",
-    "folder": "A folder on this machine, same file types",
     "enterprise_rag_bench": "EnterpriseRAG-Bench: downloads the release, loads ~500k docs and 500 questions, builds a dev subset",
-    "script": "A Python script: extract(path) yields documents, questions(path) yields benchmark questions",
+    "extract": "Python extractor: a script downloads data (e.g. a public benchmark) into the dataset's folder, then it is loaded",
+    "folder": "Load (or reload) what is in the dataset's folder",
 }
+EXTRACTOR_FILE = "extract.py"           # an extractor script lives in its dataset's folder
+NAME_RE = r"[A-Za-z0-9_-]{1,64}"
+
+
+def dataset_dir(name: str) -> Path:
+    import re
+    if not re.fullmatch(NAME_RE, name):
+        raise SystemExit(f"Invalid dataset name {name!r}: letters, digits, _ and - only")
+    return paths.DATASETS / name
+
+
+def migrate_layout() -> None:
+    """Older layouts kept the benchmark in data/raw and uploads in data/uploads/<name>."""
+    old_raw, old_uploads = paths.DATA / "raw", paths.DATA / "uploads"
+    if old_raw.is_dir() and not paths.RAW.exists():
+        paths.DATASETS.mkdir(parents=True, exist_ok=True)
+        old_raw.rename(paths.RAW)
+    if old_uploads.is_dir():
+        for d in old_uploads.iterdir():
+            if d.is_dir() and not (paths.DATASETS / d.name).exists():
+                paths.DATASETS.mkdir(parents=True, exist_ok=True)
+                d.rename(paths.DATASETS / d.name)
+        if not any(old_uploads.iterdir()):
+            old_uploads.rmdir()
+
+
+def run_extractor(folder: Path, code: str) -> None:
+    """Run an extractor script: its download(folder) writes files into the folder."""
+    from . import scripting
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / EXTRACTOR_FILE).write_text(code)
+    fns = scripting.load_functions(code, "download")
+    print(f"Running extractor into {folder}", flush=True)
+    fns["download"](str(folder))
 
 
 def ingest_source(dataset: str, source: str, params: dict, sync: bool = False) -> int | None:
-    """Ingest a dataset from one of the built-in sources (what the UI's Datasets page runs)."""
-    if source == "enterprise_rag_bench":
-        download(params.get("slices") or None)
+    """Fill and/or load a dataset folder (what the UI's Datasets page runs as a job)."""
+    if source == "enterprise_rag_bench" or (source == "folder" and dataset == BENCH):
+        if source == "enterprise_rag_bench":
+            download(params.get("slices") or None)
         snap = ingest(dataset, paths.RAW, adapter=BENCH, sync=True, note="EnterpriseRAG-Bench release")
-        build_subset(dataset, "dev", distractors=int(params.get("distractors", 20_000)))
+        if source == "enterprise_rag_bench":
+            build_subset(dataset, "dev", distractors=int(params.get("distractors", 20_000)))
         return snap
-    upload_dir = paths.UPLOADS / dataset
-    if source == "upload":
-        return ingest(dataset, upload_dir, adapter="folder", sync=sync, note="uploaded files")
+    folder = dataset_dir(dataset)
+    if source == "extract":
+        run_extractor(folder, params.get("code") or "")
+        return ingest(dataset, folder, adapter="folder", sync=True, note="extractor")
     if source == "folder":
-        folder = Path(params.get("path") or "").expanduser()
         if not folder.is_dir():
-            raise SystemExit(f"Folder not found: {folder}")
-        return ingest(dataset, folder, adapter="folder", sync=sync, note=str(folder))
-    if source == "script":
-        folder = Path(params["path"]).expanduser() if params.get("path") else upload_dir
-        folder.mkdir(parents=True, exist_ok=True)
-        return ingest(dataset, folder, adapter="script", sync=sync, note="extractor script", code=params.get("code"))
+            raise SystemExit(f"No folder {folder}. Put the dataset's files there first.")
+        return ingest(dataset, folder, adapter="folder", sync=sync, note="folder")
     raise SystemExit(f"Unknown data source {source!r}. Available: {sorted(SOURCES)}")
+
+
+def remove_dataset(dataset: str) -> None:
+    """Remove a dataset from the document store (its folder is left alone)."""
+    con = connect()
+    for table in ("snapshots", "doc_versions", "questions", "subset_docs", "subset_questions"):
+        con.execute(f"DELETE FROM {table} WHERE dataset=?", [dataset])
+    con.execute("DELETE FROM datasets WHERE name=?", [dataset])
+    con.execute("DELETE FROM doc_contents WHERE content_hash NOT IN (SELECT content_hash FROM doc_versions)")
+    con.close()
+    print(f"Removed dataset {dataset!r} from the document store")
+
+
+def folder_summary(folder: Path) -> dict:
+    files = [f for f in folder.rglob("*") if f.is_file() and not f.name.startswith(".")] if folder.is_dir() else []
+    by_ext: dict[str, list] = {}
+    for f in files:
+        e = by_ext.setdefault(f.suffix.lower() or "(none)", [0, 0])
+        e[0] += 1
+        e[1] += f.stat().st_size
+    return {"exists": folder.is_dir(), "n_files": len(files), "size": sum(v[1] for v in by_ext.values()),
+            "by_ext": {k: {"files": v[0], "size": v[1]} for k, v in sorted(by_ext.items(), key=lambda kv: -kv[1][1])},
+            "has_questions": (folder / "questions.jsonl").is_file(), "has_extractor": (folder / EXTRACTOR_FILE).is_file()}
+
+
+def list_folders() -> list[dict]:
+    paths.DATASETS.mkdir(parents=True, exist_ok=True)
+    return [{"name": d.name, **folder_summary(d)} for d in sorted(paths.DATASETS.iterdir())
+            if d.is_dir() and not d.name.startswith(".")]
+
+
+def dataset_metrics(con, dataset: str) -> dict:
+    """Numbers for the dataset page: document lengths, sources, question coverage."""
+    snap = latest_snapshot(con, dataset)
+    p = {"ds": dataset, "snap": snap, "subset": "all"}
+    docs = f"SELECT doc_id, source, length(text) AS n FROM ({docs_sql('v.doc_id, v.source, c.text')})"
+    n, chars, avg, p50, p90, mx = con.execute(
+        f"SELECT count(*), sum(n), avg(n), quantile_cont(n, 0.5), quantile_cont(n, 0.9), max(n) FROM ({docs})", p).fetchone()
+    # Log-scale length histogram: <100, 100-300, 300-1k, ... characters.
+    edges = [0, 100, 300, 1_000, 3_000, 10_000, 30_000, 100_000]
+    hist = con.execute(f"""SELECT bucket, count(*) FROM (SELECT CASE {' '.join(f"WHEN n < {b} THEN {i}" for i, b in enumerate(edges[1:]))}
+                           ELSE {len(edges) - 1} END AS bucket FROM ({docs})) GROUP BY 1 ORDER BY 1""", p).fetchall()
+    labels = [f"<{edges[1]:,}"] + [f"{a:,}–{b:,}" for a, b in zip(edges[1:], edges[2:])] + [f"≥{edges[-1]:,}"]
+    by_source = con.execute(f"SELECT source, count(*), avg(n) FROM ({docs}) GROUP BY 1 ORDER BY 2 DESC LIMIT 20", p).fetchall()
+    q = con.execute("""SELECT count(*), count(*) FILTER (WHERE len(expected_doc_ids) > 0),
+                       count(*) FILTER (WHERE gold_answer IS NOT NULL AND gold_answer <> ''), avg(len(expected_doc_ids)),
+                       avg(length(question)) FROM questions WHERE dataset=?""", [dataset]).fetchone()
+    cats = con.execute("SELECT category, count(*) FROM questions WHERE dataset=? GROUP BY 1 ORDER BY 2 DESC LIMIT 20", [dataset]).fetchall()
+    # Coverage: how many gold doc ids exist in the store (a gold id that is missing can never be retrieved).
+    gold, found = con.execute(f"""WITH g AS (SELECT DISTINCT unnest(expected_doc_ids) AS doc_id FROM questions WHERE dataset=$ds)
+                                  SELECT count(*), count(*) FILTER (WHERE doc_id IN (SELECT doc_id FROM ({docs})))
+                                  FROM g""", p).fetchone()
+    return {"snapshot": snap,
+            "docs": {"n": n, "chars": chars or 0, "avg_chars": round(avg or 0), "p50_chars": round(p50 or 0),
+                     "p90_chars": round(p90 or 0), "max_chars": mx or 0, "approx_tokens": round((chars or 0) / 4)},
+            "length_hist": [{"bucket": labels[b], "docs": c} for b, c in hist],
+            "by_source": [{"source": s_, "docs": c, "avg_chars": round(a)} for s_, c, a in by_source],
+            "questions": {"n": q[0], "with_gold_docs": q[1], "with_gold_answer": q[2], "avg_gold_docs": round(q[3] or 0, 2),
+                          "avg_question_chars": round(q[4] or 0), "gold_doc_ids": gold, "gold_docs_found": found},
+            "categories": [{"category": c, "questions": k} for c, k in cats]}
 
 
 # ----------------------------------------------------------------------------- reading

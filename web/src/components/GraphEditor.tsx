@@ -60,7 +60,7 @@ interface Props {
   status?: Record<string, NodeStatus>              // per node: its part in the latest run
   selected?: string | null                          // the selected node (owned by the page, so it survives a save)
   onSelect?: (id: string | null) => void
-  onSaveScript?: (nodeId: string, code: string) => Promise<unknown>   // save a script node now (saves the pipeline)
+  onSaveScript?: (nodeId: string, code: string, patch?: Partial<GraphNode>) => Promise<unknown>   // save a script node now (saves the pipeline)
 }
 
 // A node canvas (React Flow) plus a settings panel for the selected node.
@@ -219,7 +219,8 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
             onSaveScript={onSaveScript && (code => { update(sel.id, { params: { ...sel.params, code } }); return onSaveScript(sel.id, code) })} />}
 
           {info?.source && sel.impl !== 'python' && <BuiltinCode key={`code:${sel.id}:${sel.impl}`} node={sel} info={info}
-            onConvert={params => update(sel.id, { impl: 'python', params })} />}
+            onConvert={params => update(sel.id, { impl: 'python', params })}
+            onSave={onSaveScript && ((params, code) => { update(sel.id, { impl: 'python', params: { ...params, code } }); return onSaveScript(sel.id, code, { impl: 'python', params }) })} />}
           {extra?.(sel, { ...graph, nodes: nodes.map(n => n.data.node), edges })}
         </>}
       </div>
@@ -230,16 +231,22 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
 // The code a built-in node runs. Where an equivalent script exists it is shown with this node's
 // current settings filled in, and editing it in the full-window editor turns the node into a
 // Python node. Otherwise the implementation's own function is shown, with the whole file below.
-function BuiltinCode({ node, info, onConvert }: { node: GraphNode; info: ImplInfo; onConvert: (params: Record<string, unknown>) => void }) {
+function BuiltinCode({ node, info, onConvert, onSave }: {
+  node: GraphNode; info: ImplInfo; onConvert: (params: Record<string, unknown>) => void
+  onSave?: (params: Record<string, unknown>, code: string) => Promise<unknown>     // convert and save the pipeline now
+}) {
   const [eq, setEq] = useState<Record<string, unknown> | null>(null)
+  const [failed, setFailed] = useState(false)          // no equivalent script after all: show the built-in code
   const paramsKey = JSON.stringify(node.params)
   useEffect(() => {
     if (!info.scriptable) return
     const t = setTimeout(() => send<Record<string, unknown>>('POST', '/api/script-equivalent', { stage: node.stage, impl: node.impl, params: node.params })
-      .then(setEq).catch(() => setEq(null)), 250)
+      .then(r => { setEq(r); setFailed(false) }).catch(() => { setEq(null); setFailed(true) }), 250)
     return () => clearTimeout(t)
   }, [paramsKey, info.scriptable, node.stage, node.impl]) // eslint-disable-line react-hooks/exhaustive-deps
   const code = eq ? String(eq.code ?? '') : info.fn_source ?? info.source ?? ''
+  // Until the editable script arrives, don't offer a read-only editor in its place.
+  if (info.scriptable && !eq && !failed) return <p className="small muted" style={{ marginTop: 10 }}>Loading this node’s Python…</p>
   return (
     <div style={{ marginTop: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
@@ -247,7 +254,7 @@ function BuiltinCode({ node, info, onConvert }: { node: GraphNode; info: ImplInf
         {eq && <button className="sm" title="Replace this node with an editable script that does the same thing" onClick={() => onConvert(eq)}>Edit as Python script</button>}
       </div>
       <CodeEditor value={code} readOnly height="240px" kind={node.stage} title={`${node.stage} · ${node.impl}${eq ? '' : ` (${info.source_file})`}`}
-        onStudioSave={eq ? c => onConvert({ ...eq, code: c }) : undefined}
+        onStudioSave={eq ? c => { if (onSave) onSave(eq, c); else onConvert({ ...eq, code: c }) } : undefined}
         notice={eq ? 'Saving turns this node into a Python script node.' : undefined} />
       {!eq && info.source && info.fn_source && <details style={{ marginTop: 6 }}><summary className="small muted">Whole file ({info.source_file})</summary>
         <CodeEditor value={info.source} readOnly height="240px" title={info.source_file} /></details>}

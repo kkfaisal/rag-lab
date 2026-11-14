@@ -191,9 +191,9 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
 
         <GraphEditor status={live.status} key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets} targets={targets}
           selected={selected} onSelect={setSelected}
-          onSaveScript={(nodeId, code) => {      // save one node's script now: the whole pipeline is saved, recording a version
+          onSaveScript={(nodeId, code, patch) => {      // save one node's script now: the whole pipeline is saved, recording a version
             const g = latest.current!
-            return save({ ...g, nodes: g.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, code } } : n) })
+            return save({ ...g, nodes: g.nodes.map(n => n.id === nodeId ? { ...n, ...patch, params: { ...(patch?.params ?? n.params), code } } : n) })
           }}
           onChange={setGraph} extra={(n, g) => kind !== 'ingestion' ? null : n.stage === 'chunk' ? <ChunkPreview node={n} graph={g} />
             : n.stage === 'transform' ? <TransformPreview node={n} graph={g} /> : null} />

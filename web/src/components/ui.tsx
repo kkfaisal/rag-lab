@@ -40,5 +40,6 @@ export const Icon = {
   runs: <svg viewBox="0 0 16 16" {...P}><path d="M3 4h10M3 8h10M3 12h10" /></svg>,
   diff: <svg viewBox="0 0 16 16" {...P}><path d="M5 2v12M11 2v12M5 5H2.5M5 11H2.5M11 5h2.5M11 11h2.5" /></svg>,
   heat: <svg viewBox="0 0 16 16" {...P}><rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" /></svg>,
+  help: <svg viewBox="0 0 16 16" {...P}><circle cx="8" cy="8" r="6" /><path d="M6.3 6.2a1.8 1.8 0 0 1 3.5.6c0 1.2-1.8 1.5-1.8 2.6M8 11.6v.1" /></svg>,
   jobs: <svg viewBox="0 0 16 16" {...P}><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3l2 1.5" /></svg>,
 }

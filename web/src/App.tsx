@@ -4,6 +4,7 @@ import { Icon, PageHead } from './components/ui'
 import Datasets from './pages/Datasets'
 import Diff from './pages/Diff'
 import GraphPage from './pages/GraphPage'
+import HowItWorks from './pages/HowItWorks'
 import Heatmap from './pages/Heatmap'
 import QuestionPage from './pages/QuestionPage'
 import Results from './pages/Results'
@@ -23,6 +24,7 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="logo"><span className="logo-mark">R</span>rag-lab</div>
+        {item('/how-it-works', Icon.help, 'How it works')}
         <div className="nav-group">Define</div>
         {item('/datasets', Icon.data, 'Datasets')}
         {item('/targets', Icon.target, 'Targets')}
@@ -41,6 +43,7 @@ export default function App() {
       <main className="main">
         <Routes>
           <Route path="/" element={<Navigate to="/datasets" replace />} />
+          <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/datasets" element={<Datasets />} />
           <Route path="/datasets/:name" element={<Datasets />} />
           <Route path="/targets/:id?" element={<Targets />} />

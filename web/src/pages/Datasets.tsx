@@ -13,21 +13,27 @@ const QUESTION_FORMAT = '{"question_id": "q1", "question": "…", "expected_doc_
 interface Row { name: string; folder?: FolderSummary; loaded?: DatasetInfo }
 const docCount = (d?: DatasetInfo) => d ? Object.values(d.by_source).reduce((a, b) => a + b, 0) : 0
 
-// Datasets are folders under data/datasets/. This page lists them, creates new ones
-// (EnterpriseRAG-Bench download, a Python extractor, or an empty folder), and shows
-// each one's files, metrics, questions and snapshots.
+// A dataset has two explicit steps, each with its own button:
+//   Download  raw files into data/datasets/<name>/ (a Python extractor, or files you add)
+//   Load      read that folder into rag-lab's internal document store, which pipelines read from
+// This page lists datasets, creates new ones, and shows each one's files, metrics, questions and snapshots.
 export default function Datasets() {
   const { name } = useParams()
   const [loaded, setLoaded] = useState<DatasetInfo[] | null>(null)
   const [folders, setFolders] = useState<(FolderSummary & { name: string })[] | null>(null)
   const [creating, setCreating] = useState<string | null>(null)     // null = closed, '' = new, name = a public dataset
   const jobs = useJobs()
-  const busy = jobs.filter(isActive).length
+  const [error, setError] = useState<string>()
+  const loadIntoStore = (n: string) => send('POST', `/api/datasets/${n}/ingest`, { source: 'folder', sync: true })
+    .then(() => { setError(undefined); reload() }).catch(e => setError(errText(e)))
+  const working = (n: string) => jobs.some(j => j.kind === 'dataset' && isActive(j) && j.title.endsWith(` ${n}`))
   const reload = useCallback(() => {
     get<DatasetInfo[]>('/api/datasets').then(setLoaded).catch(() => setLoaded([]))
     get<(FolderSummary & { name: string })[]>('/api/folders').then(setFolders).catch(() => setFolders([]))
   }, [])
-  useEffect(() => { reload() }, [reload, busy])
+  // Refresh whenever a dataset job changes state (a quick job can start and finish between two polls).
+  const jobState = jobs.filter(j => j.kind === 'dataset').map(j => `${j.id}:${j.status}`).join()
+  useEffect(() => { reload() }, [reload, jobState])
 
   const rows: Row[] = []
   for (const f of folders ?? []) rows.push({ name: f.name, folder: f, loaded: loaded?.find(d => d.name === f.name) })
@@ -41,18 +47,19 @@ export default function Datasets() {
   }
   return (
     <>
-      <PageHead title="Datasets" sub="A dataset is a folder in data/datasets/ with documents (.txt, .md, .jsonl) and a questions.jsonl. Loading a folder reads it into the document store as a snapshot; ingestion pipelines then chunk it and write it to a target, embedded, BM25-indexed or both.">
+      <PageHead title="Datasets" sub="Two steps per dataset. Download puts the raw files (documents + questions.jsonl) in data/datasets/<name>/. Load reads that folder into rag-lab's internal document store: normalized documents and questions, kept as versioned snapshots. Ingestion pipelines read from the store, then chunk, embed or index into a target.">
         <button className="primary" onClick={() => setCreating(c => c === '' ? null : '')}>New dataset</button>
       </PageHead>
       {creating !== null && <NewDataset key={creating} existing={rows.map(r => r.name)} initial={creating || undefined}
         onClose={() => setCreating(null)} onDone={reload} />}
       {jobs.some(j => j.kind === 'dataset') && <><div className="section-title">Recent dataset jobs</div><JobList jobs={jobs} kinds={['dataset']} limit={3} /></>}
+      <ErrorNote error={error} />
 
       {loaded === null || folders === null ? <p className="muted">Loading…</p> : rows.length === 0 ? (
         <Empty>No datasets on this machine yet. Get one of the public datasets below (each is a Python extractor script you can read first), create your own with <b>New dataset</b>, or put a folder in <code>data/datasets/</code>.</Empty>
       ) : (
         <div className="table-wrap" style={{ marginTop: 14 }}><table>
-          <thead><tr><th>dataset</th><th>state</th><th className="num">documents</th><th className="num">questions</th><th className="num">files</th><th className="num">size on disk</th><th>origin</th></tr></thead>
+          <thead><tr><th>dataset</th><th>state</th><th className="num">documents</th><th className="num">questions</th><th className="num">files</th><th className="num">size on disk</th><th>origin</th><th /></tr></thead>
           <tbody>{rows.map(r => (
             <tr key={r.name}>
               <td><Link to={`/datasets/${r.name}`}><b>{r.name}</b></Link></td>
@@ -62,11 +69,13 @@ export default function Datasets() {
               <td className="num">{r.folder?.exists ? r.folder.n_files.toLocaleString() : '–'}</td>
               <td className="num">{r.folder?.exists ? bytes(r.folder.size) : '–'}</td>
               <td className="small muted">{r.folder?.has_extractor ? 'Python extractor' : r.name === BENCH ? 'EnterpriseRAG-Bench' : 'local files'}</td>
+              <td className="num"><LoadButton loaded={!!r.loaded} downloaded={!!r.folder?.exists} working={working(r.name)} onLoad={() => loadIntoStore(r.name)} /></td>
             </tr>))}</tbody>
         </table></div>)}
 
-      <div className="section-title" style={{ marginTop: 22 }}>Public datasets <span className="muted">· downloaded to this machine by a Python extractor; not part of the repository</span></div>
-      <PublicDatasets loaded={(loaded ?? []).map(d => d.name)} onGet={name => { setCreating(name); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      <div className="section-title" style={{ marginTop: 22 }}>Public datasets <span className="muted">· Get downloads the raw files with a Python extractor (not part of the repository); Load reads them into the internal store</span></div>
+      <PublicDatasets loaded={(loaded ?? []).map(d => d.name)} downloaded={(folders ?? []).map(f => f.name)} working={working} busy={jobState}
+        onGet={name => { setCreating(name); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onLoad={loadIntoStore} />
       <p className="small faint">Each dataset keeps its own license (EnterpriseRAG-Bench: MIT; BEIR sets: see their Hugging Face cards). From a terminal: <code>uv run python scripts/get_datasets.py --list</code>.</p>
     </>
   )
@@ -74,28 +83,41 @@ export default function Datasets() {
 
 function StateBadge({ row }: { row: Row }) {
   if (!row.folder?.exists && !(row.name === BENCH && row.loaded)) return <Pill status="bad">folder missing</Pill>
-  if (!row.loaded) return <Pill status="warn">not loaded</Pill>
+  if (!row.loaded) return <Pill status="warn">downloaded · not loaded</Pill>
   if (!row.loaded.n_questions) return <Pill status="warn">no questions</Pill>
-  return <Pill status="ok">loaded · #{row.loaded.latest_snapshot}</Pill>
+  return <Pill status="ok">loaded · snapshot #{row.loaded.latest_snapshot}</Pill>
+}
+
+const LOAD_HINT = 'Read the folder into rag-lab’s internal document store (only new or changed documents are added, as a new snapshot). Pipelines use the store.'
+
+function LoadButton({ loaded, downloaded, working, onLoad }: { loaded: boolean; downloaded: boolean; working: boolean; onLoad: () => void }) {
+  return <button className={`sm ${loaded ? '' : 'primary'}`} disabled={!downloaded || working} title={downloaded ? LOAD_HINT : 'Download it first'} onClick={onLoad}>
+    {working ? 'Working…' : loaded ? 'Reload' : 'Load'}</button>
 }
 
 interface PublicDataset { name: string; description: string; size: string; downloaded: boolean }
 
 // Public datasets, each fetched by a Python extractor script you can read and edit first.
 // On a fresh install this is how data gets onto the machine; nothing is in the repository.
-function PublicDatasets({ loaded, onGet }: { loaded: string[]; onGet: (name: string) => void }) {
+function PublicDatasets({ loaded, downloaded, working, busy, onGet, onLoad }: {
+  loaded: string[]; downloaded: string[]; working: (name: string) => boolean; busy: string
+  onGet: (name: string) => void; onLoad: (name: string) => void
+}) {
   const [list, setList] = useState<PublicDataset[]>()
-  useEffect(() => { get<PublicDataset[]>('/api/benchmarks').then(setList).catch(() => setList([])) }, [])
+  useEffect(() => { get<PublicDataset[]>('/api/benchmarks').then(setList).catch(() => setList([])) }, [busy])
   if (!list) return null
   return (
     <div className="table-wrap"><table>
-      <thead><tr><th>public dataset</th><th className="num">download</th><th>what it is</th><th>on this machine</th><th /></tr></thead>
-      <tbody>{list.map(d => (
+      <thead><tr><th>public dataset</th><th className="num">download</th><th>what it is</th><th>on this machine</th><th className="num">1 · download</th><th className="num">2 · load</th></tr></thead>
+      <tbody>{list.map(d => {
+        const isDown = d.downloaded || downloaded.includes(d.name), isLoaded = loaded.includes(d.name)
+        return (
         <tr key={d.name}>
           <td><b>{d.name}</b></td><td className="num small">{d.size}</td><td className="small muted">{d.description}</td>
-          <td>{loaded.includes(d.name) ? <Pill status="ok">loaded</Pill> : d.downloaded ? <Pill status="warn">downloaded</Pill> : <span className="small faint">–</span>}</td>
-          <td className="num"><button className="sm" onClick={() => onGet(d.name)}>{loaded.includes(d.name) ? 'Refresh' : 'Get'}</button></td>
-        </tr>))}</tbody>
+          <td>{isLoaded ? <Pill status="ok">loaded</Pill> : isDown ? <Pill status="warn">downloaded</Pill> : <span className="small faint">–</span>}</td>
+          <td className="num"><button className="sm" title="Download the raw files into data/datasets/ with this dataset’s Python extractor (you can read it first)" onClick={() => onGet(d.name)}>{isDown ? 'Re-download' : 'Get'}</button></td>
+          <td className="num"><LoadButton loaded={isLoaded} downloaded={isDown} working={working(d.name)} onLoad={() => onLoad(d.name)} /></td>
+        </tr>)})}</tbody>
     </table></div>)
 }
 
@@ -128,27 +150,28 @@ function NewDataset({ existing, initial, onClose, onDone }: { existing: string[]
       <div className="card-head"><h2>{initial ? `Get ${initial}` : 'New dataset'}</h2><div className="actions"><button className="ghost sm" onClick={onClose}>Close</button></div></div>
       {!initial && <div className="option-cards">
         <div className={`option ${kind === 'extract' ? 'selected' : ''}`} onClick={() => setKind('extract')}>
-          <b>Python extractor</b><span>A script downloads or converts data into the dataset’s folder; then the folder is loaded. The template fetches a BEIR benchmark.</span></div>
+          <b>Python extractor</b><span>A script downloads or converts data into the dataset’s folder. Load it into the store afterwards. The template fetches a BEIR benchmark.</span></div>
         <div className={`option ${kind === 'folder' ? 'selected' : ''}`} onClick={() => setKind('folder')}>
-          <b>Empty folder</b><span>Creates data/datasets/&lt;name&gt;/. Add files with the file explorer or copy them in, then load.</span></div>
+          <b>Empty folder</b><span>Creates data/datasets/&lt;name&gt;/. Add files with the file explorer or copy them in, then press Load.</span></div>
       </div>}
       {!initial && (
         <div className="form" style={{ marginTop: 14 }}>
           <div className="field"><label>Dataset name (= folder name)</label>
             <input value={name} placeholder="my_docs" onChange={e => setName(e.target.value.trim())} />
             {name && !valid ? <span className="hint bad-text">Letters, digits, _ and - only</span>
-              : taken ? <span className="hint">A dataset with this name exists. {kind === 'extract' ? 'The extractor will refresh its folder.' : ''}</span>
+              : taken ? <span className="hint">A dataset with this name exists. {kind === 'extract' ? 'The extractor will download into its folder again.' : ''}</span>
               : <span className="hint">data/datasets/{name || '…'}/</span>}</div>
         </div>)}
       {kind === 'extract' && <>
         <p className="small muted">{initial ? <>This script downloads the dataset into <code>data/datasets/{initial}/</code> on this machine. Read or edit it, then run it. </> : null}
           It is saved in the folder as <code>extract.py</code>, so you can re-run it later; <code>download(folder)</code> must leave documents and a <code>questions.jsonl</code> there.
-          Same as <code>uv run python scripts/get_datasets.py {initial ?? '<name>'} --load</code>.</p>
+          This only downloads: press <b>Load</b> afterwards to read the files into the internal store.
+          From a terminal: <code>uv run python scripts/get_datasets.py {initial ?? '<name>'}</code> (add <code>--load</code> to do both).</p>
         {code !== undefined && <CodeEditor value={code} onChange={setCode} height="300px" kind="extract" title={`Extractor · ${name}`} />}</>}
-      {initial === BENCH && <div className="notice" style={{ marginTop: 12 }}>A 1.3 GB download that takes a few minutes and ~6 GB of disk once loaded. Files already downloaded are skipped.</div>}
+      {initial === BENCH && <div className="notice" style={{ marginTop: 12 }}>A 1.3 GB download that takes a few minutes. Loading it afterwards takes a couple of minutes and ~5 GB of disk. Files already downloaded are skipped.</div>}
       <div className="row" style={{ marginTop: 12 }}><span className="grow" />
         <button className="primary" disabled={!valid || (kind === 'folder' && taken) || (kind === 'extract' && code === undefined)} onClick={go}>
-          {kind === 'extract' ? 'Run extractor and load' : 'Create folder'}</button></div>
+          {kind === 'extract' ? 'Run extractor (download)' : 'Create folder'}</button></div>
       <ErrorNote error={error} />
     </div>
   )
@@ -167,7 +190,7 @@ function DatasetPage({ row, onChange, jobs }: { row: Row; onChange: () => void; 
   const act = (p: Promise<unknown>, text: string) => p.then(() => { setError(undefined); setMsg(text); onChange() }).catch(e => setError(errText(e)))
   const load = () => act(send('POST', `/api/datasets/${name}/ingest`, { source: 'folder', sync }), 'Load queued')
   const remove = () => {
-    if (window.confirm(`Remove “${name}” from the document store? Its folder and files are kept, so you can load it again.`))
+    if (window.confirm(`Remove “${name}” from the internal document store? Its folder and downloaded files are kept, so you can load it again.`))
       act(send('DELETE', `/api/datasets/${name}`), 'Removal queued')
   }
   const tabs: [Tab, string][] = [['overview', 'Overview'], ['files', 'Files'], ['questions', 'Questions'], ['snapshots', 'Snapshots'],
@@ -177,8 +200,8 @@ function DatasetPage({ row, onChange, jobs }: { row: Row; onChange: () => void; 
     <>
       <PageHead title={name} sub={name === BENCH ? 'EnterpriseRAG-Bench release: synthetic company documents with benchmark questions.' : `data/datasets/${name}/`}>
         <button className="ghost" onClick={() => nav('/datasets')}>All datasets</button>
-        {loaded && <button className="danger" onClick={remove}>Remove</button>}
-        <button className="primary" disabled={running || (!folder?.exists && name !== BENCH)} onClick={load}>{running ? 'Working…' : loaded ? 'Reload folder' : 'Load folder'}</button>
+        {loaded && <button className="danger" onClick={remove} title="Remove from the internal store; the folder is kept">Remove from store</button>}
+        <button className="primary" title={LOAD_HINT} disabled={running || (!folder?.exists && name !== BENCH)} onClick={load}>{running ? 'Working…' : loaded ? 'Reload into store' : 'Load into store'}</button>
       </PageHead>
       <div className="row" style={{ marginBottom: 10, gap: 14 }}>
         <StateBadge row={row} />
@@ -194,9 +217,9 @@ function DatasetPage({ row, onChange, jobs }: { row: Row; onChange: () => void; 
       <div className="tabs" style={{ marginBottom: 14 }}>
         {tabs.map(([k, label]) => <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>{label}</button>)}
       </div>
-      {tab === 'overview' && (loaded ? <Overview name={name} info={loaded} folder={folder} /> : <Empty>Not loaded yet. Check the files, then press <b>Load folder</b>. The folder needs documents and a <code>questions.jsonl</code> ({QUESTION_FORMAT}).</Empty>)}
+      {tab === 'overview' && (loaded ? <Overview name={name} info={loaded} folder={folder} /> : <Empty>Downloaded, not loaded. Check the files, then press <b>Load into store</b> to read them into rag-lab’s internal document store, which pipelines use. The folder needs documents and a <code>questions.jsonl</code> ({QUESTION_FORMAT}).</Empty>)}
       {tab === 'files' && <Explorer name={name} onChange={onChange} />}
-      {tab === 'questions' && (loaded ? <Questions name={name} /> : <Empty>Load the dataset to browse its questions.</Empty>)}
+      {tab === 'questions' && (loaded ? <Questions name={name} /> : <Empty>Load the dataset into the store to browse its questions.</Empty>)}
       {tab === 'snapshots' && (loaded ? <Snapshots info={loaded} /> : <Empty>No snapshots yet.</Empty>)}
       {tab === 'extractor' && <Extractor name={name} onRun={() => { setMsg('Extractor queued'); onChange() }} />}
     </>
@@ -280,7 +303,7 @@ function Explorer({ name, onChange }: { name: string; onChange: () => void }) {
     const form = new FormData()
     for (const f of files) form.append('files', f, (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name)
     setMsg('Uploading…')
-    try { const r = await send<{ saved: number }>('POST', `/api/datasets/${name}/upload?path=${encodeURIComponent(path)}`, form); setMsg(`${r.saved} file(s) added. Reload the folder to load them.`); list(); onChange() }
+    try { const r = await send<{ saved: number }>('POST', `/api/datasets/${name}/upload?path=${encodeURIComponent(path)}`, form); setMsg(`${r.saved} file(s) added. Press Reload into store to load them.`); list(); onChange() }
     catch (e) { setMsg(undefined); setError(errText(e)) }
     if (input.current) input.current.value = ''
   }
@@ -360,9 +383,9 @@ function Extractor({ name, onRun }: { name: string; onRun: () => void }) {
   if (code === undefined) return <p className="muted">Loading…</p>
   return (
     <div className="card">
-      <p className="small muted" style={{ marginTop: 0 }}>This folder’s <code>extract.py</code>. Running it downloads into the folder again, then reloads it (files the script no longer writes stay on disk; documents no longer in the folder leave the new snapshot).</p>
+      <p className="small muted" style={{ marginTop: 0 }}>This folder’s <code>extract.py</code>. Running it downloads into the folder again (files the script no longer writes stay on disk). It doesn’t touch the store: press <b>Reload into store</b> afterwards.</p>
       <CodeEditor value={code} onChange={setCode} height="360px" kind="extract" title={`Extractor · ${name}`} />
-      <div className="row" style={{ marginTop: 10 }}><span className="grow" /><button className="primary" onClick={run}>Save, run and load</button></div>
+      <div className="row" style={{ marginTop: 10 }}><span className="grow" /><button className="primary" onClick={run}>Save and run (download)</button></div>
       <ErrorNote error={error} />
     </div>)
 }

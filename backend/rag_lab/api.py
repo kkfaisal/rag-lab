@@ -583,8 +583,9 @@ def dataset_metrics(name: str):
 
 @app.post("/api/datasets/{name}/ingest")
 def ingest_dataset(name: str, body: dict = Body(default={})):
-    """Queue a job that fills and/or loads a dataset folder: {"source": enterprise_rag_bench | extract | folder,
-    "params": {"code"?}, "sync"?}. Loading records a snapshot holding only what changed; questions are required."""
+    """Queue a dataset job: {"source": "extract" (download: run the extractor into the folder) |
+    "folder" (load: read the folder into the internal document store), "params": {"code"?}, "sync"?}.
+    Loading records a snapshot holding only what changed; questions are required."""
     _dataset_dir(name)
     source = body.get("source", "folder")
     if source not in data.SOURCES:
@@ -593,7 +594,7 @@ def ingest_dataset(name: str, body: dict = Body(default={})):
         check = scripting.check("extract", (body.get("params") or {}).get("code", ""))
         if not check["ok"]:
             raise HTTPException(400, check["message"])
-    title = {"enterprise_rag_bench": "Download + load", "extract": "Extract + load", "folder": "Load folder"}[source]
+    title = {"enterprise_rag_bench": "Download + load", "extract": "Download", "folder": "Load into store"}[source]
     return jobs.submit("dataset", f"{title}: {name}",
                        {"dataset": name, "source": source, "params": body.get("params") or {}, "sync": bool(body.get("sync"))})
 

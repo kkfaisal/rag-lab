@@ -90,6 +90,18 @@ def test_dataset_requires_questions(tmp_path):
     assert con.execute("SELECT count(*) FROM datasets WHERE name='noq'").fetchone()[0] == 0     # nothing half-created
 
 
+def test_duplicate_doc_ids_keep_first(tmp_path):
+    (tmp_path / "a.jsonl").write_text('{"id": "x", "text": "first"}\n{"id": "x", "text": "second"}\n{"id": "y", "text": "first"}\n')
+    _questions(tmp_path, [{"question_id": "q", "question": "?"}])
+    assert data.ingest("dups", tmp_path) == 1
+    con = data.connect(read_only=True)
+    rows = con.execute(f"SELECT doc_id, text FROM ({data.docs_sql('v.doc_id, c.text')}) ORDER BY 1",
+                       {"ds": "dups", "snap": 1, "subset": "all"}).fetchall()
+    n_contents = con.execute("SELECT count(*) FROM doc_contents").fetchone()[0]
+    con.close()
+    assert rows == [("x", "first"), ("y", "first")] and n_contents >= 1
+
+
 def test_incremental_dataset_snapshots(tmp_path):
     _questions(tmp_path, [{"question_id": "q1", "question": "first?", "expected_doc_ids": ["a.txt"]}])
     assert _dataset(tmp_path, "t", {"a.txt": "Alpha\nfirst doc", "b.md": "# Beta\nsecond doc"}) == 1
@@ -105,8 +117,8 @@ def test_incremental_dataset_snapshots(tmp_path):
     assert old.endswith("second doc")                                         # old snapshot still reconstructable
 
 
-def test_extractor_fills_folder_then_loads_it():
-    # An extractor writes files into data/datasets/<name>/; the folder is then loaded.
+def test_download_then_load_are_separate_steps():
+    # Download: an extractor writes files into data/datasets/<name>/. Load: a separate step reads them into the store.
     code = ("import json\nfrom pathlib import Path\n"
             "def download(folder):\n"
             "    f = Path(folder)\n"
@@ -114,7 +126,11 @@ def test_extractor_fills_folder_then_loads_it():
             " + json.dumps({'id': 'b', 'text': 'Orders ship from Leeds'}) + '\\n')\n"
             "    (f / 'questions.jsonl').write_text(json.dumps({'question_id': 'q1', 'question': 'where do orders ship from',"
             " 'expected_doc_ids': ['b', 'missing']}) + '\\n')\n")
-    assert data.ingest_source("ex", "extract", {"code": code}) == 1
+    assert data.ingest_source("ex", "extract", {"code": code}) is None        # download only: nothing loaded yet
+    con = data.connect(read_only=True)
+    assert not con.execute("SELECT count(*) FROM datasets WHERE name='ex'").fetchone()[0]
+    con.close()
+    assert data.ingest_source("ex", "folder", {}) == 1                          # load: first snapshot
     folder = data.dataset_dir("ex")
     assert (folder / data.EXTRACTOR_FILE).read_text() == code                  # the script is kept with its data
     summary = data.folder_summary(folder)

@@ -30,14 +30,16 @@ def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
 def data_add(dataset: str = typer.Argument(..., help="Dataset name = its folder under data/datasets/"),
              source: str = typer.Option("folder", help="folder | extract | enterprise_rag_bench"),
              sync: bool = typer.Option(False, help="Also delete docs that are no longer in the folder")):
-    """Load a dataset folder (data/datasets/<name>/). `extract` first runs the folder's extract.py.
-    Only new and changed documents are stored (a new snapshot)."""
+    """Load a dataset folder (data/datasets/<name>/) into the internal document store.
+    `extract` first runs the folder's extract.py (download). Only new and changed documents are stored (a new snapshot)."""
     from . import data
     data.migrate_layout()
     params = {}
     if source == "extract":
         params["code"] = (data.dataset_dir(dataset) / data.EXTRACTOR_FILE).read_text()
     data.ingest_source(dataset, source, params, sync=sync)
+    if source == "extract":
+        data.ingest_source(dataset, "folder", {}, sync=True)
 
 
 @data_app.command("get")

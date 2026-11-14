@@ -71,8 +71,9 @@ uv run rag-lab serve                      # http://127.0.0.1:8000
 
 Then, in the browser:
 
-1. **Datasets.** Get a public dataset (each is a Python extractor script you can read first), write
-   your own extractor with **New dataset**, or create an empty folder and add files. Then load it.
+1. **Datasets.** Two buttons per dataset: **Get** downloads the raw files (a Python extractor script
+   you can read first), then **Load** reads them into rag-lab's internal document store. Or write your
+   own extractor with **New dataset**, or create an empty folder, add files and press **Load**.
 2. **Targets.** A local store is created for you; add Qdrant, OpenSearch or a script target if you like.
 3. **Ingestion.** Open the example pipeline, check the source and target nodes, press **Run ingestion**.
 4. **Retrieval.** Open an example pipeline, try a query, press **Run benchmark**.
@@ -115,8 +116,8 @@ Every dataset lands in `data/datasets/<name>/` as `docs.jsonl` + `questions.json
 [BEIR](https://huggingface.co/BeIR) name works too. BEIR sets come from their Hugging Face mirror
 through the extractor template, saved as `extract.py` in the folder so you can edit and re-run it from
 the dataset's Extractor tab. Downloads stream to disk, so the large ones don't need much memory.
-Without `--load`, load the dataset later from the Datasets page. `uv run rag-lab data get …` does the
-same as the script.
+Without `--load` the script only downloads; press **Load** on the Datasets page afterwards.
+`uv run rag-lab data get …` does the same as the script.
 
 Every public dataset, EnterpriseRAG-Bench included, is fetched by a Python extractor script that is
 saved in its folder as `extract.py`. EnterpriseRAG-Bench's documents stay in the release zip
@@ -124,9 +125,10 @@ saved in its folder as `extract.py`. EnterpriseRAG-Bench's documents stay in the
 by the benchmark's LLM judge (`uv run rag-lab bench setup`), and loading it builds a 100-question `dev`
 subset. Downloads skip files that are already there.
 
-On a fresh install the Datasets page lists these public datasets. **Get** opens the dataset's
-extractor script, so you can read or edit it before running it; it then downloads the data to this
-machine and loads it. rag-lab also creates a local target and two example retrieval pipelines. The example ingestion pipeline appears once the first dataset with questions is
+On a fresh install the Datasets page lists these public datasets, each with two buttons. **Get**
+opens the dataset's extractor script, so you can read or edit it before running it; running it
+downloads the raw files to `data/datasets/<name>/`. **Load** then reads that folder into the internal
+document store. The two are separate so you can look at (or change) the raw files before loading. rag-lab also creates a local target and two example retrieval pipelines. The example ingestion pipeline appears once the first dataset with questions is
 loaded. Each example is created only once, so deleting one doesn't bring it back.
 
 **Licenses.** The data belongs to its authors and is downloaded from them, never redistributed here.
@@ -139,7 +141,7 @@ Hugging Face). Check them before you use or share the data.
 
 ```
 data/datasets/
-  enterprise_rag_bench/   all_documents.zip, questions.jsonl         (built-in download)
+  enterprise_rag_bench/   extract.py, all_documents.zip, questions.jsonl   (Python extractor)
   scifact/                extract.py, docs.jsonl, questions.jsonl    (Python extractor)
   my_docs/                handbook/*.md, tickets.jsonl, questions.jsonl   (your own files)
 ```
@@ -156,9 +158,18 @@ Documents can be `.txt` / `.md` files (doc id = path inside the folder) or `.jso
   questions with gold documents) from Hugging Face; change `DATASET` for other BEIR sets.
 - **Your own files**: create the folder (in the UI, or just `mkdir`), then copy or upload files.
 
-**Loading** a folder reads it into the document store (`data/corpus.duckdb`). Each load compares the
-documents with the dataset's current state by content hash and stores only the difference as a new
-snapshot, so older snapshots stay reconstructable. A folder without questions is refused.
+**Two steps: download, then load.** Downloading (or copying files in) only fills the folder: that is
+the raw data. **Loading** reads the folder into rag-lab's internal document store
+(`data/corpus.duckdb`): each document normalized to one row (id, source, title, text, metadata,
+content hash), plus the questions. Each load compares the documents with the dataset's current state
+by content hash and stores only the difference as a new snapshot, so older snapshots stay
+reconstructable and runs record exactly which documents they saw. A folder without questions is
+refused. Pipelines read from the store, not the folder, so formats are parsed once, not on every run.
+
+The store knows nothing about chunks, vectors or indexes: those are made by ingestion pipelines. So
+the same loaded dataset can feed any kind of pipeline, including future ones (a graph-building
+ingestion, for example, would read the same documents and write entities and relations instead of
+chunks).
 
 Each dataset's page has:
 - **Overview**: document count, approximate tokens, length percentiles and a length histogram, source

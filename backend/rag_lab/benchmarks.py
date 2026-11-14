@@ -66,9 +66,7 @@ def fetch(name: str, load: bool = False, split: str = "test") -> None:
     code = extractor(name, split)
     data.run_extractor(data.dataset_dir(name), code)                     # download first, without the store
     if load:
-        _load(lambda: data.ingest_source(name, "folder", {}, sync=True), name)
-        if name == data.BENCH:
-            _load(lambda: data.build_subset(name, "dev"), name)
+        _load(lambda: data.ingest_source(name, "folder", {}, sync=True), name)   # EnterpriseRAG-Bench also builds "dev"
     print(f"{name}: data/datasets/{name}/" + ("" if load else "  (load it on the Datasets page, or rerun with --load)"))
 
 

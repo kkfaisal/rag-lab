@@ -141,8 +141,11 @@ def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: boo
             print(f"\r  read {n:,} docs", end="", flush=True)
     n += _insert_staged(con, batch)
     print(f"\r  read {n:,} docs")
-    con.execute("""CREATE OR REPLACE TEMP TABLE incoming AS SELECT * FROM staged
-                   QUALIFY row_number() OVER (PARTITION BY doc_id ORDER BY path) = 1""")
+    # A doc id seen twice keeps its first occurrence. Only ids and row ids are compared: a window or
+    # GROUP BY over rows that carry the text would need memory proportional to the dataset.
+    if con.execute("SELECT count(*) - count(DISTINCT doc_id) FROM staged").fetchall()[0][0]:
+        con.execute("DELETE FROM staged WHERE rowid NOT IN (SELECT min(rowid) FROM staged GROUP BY doc_id)")
+    con.execute("CREATE OR REPLACE TEMP VIEW incoming AS SELECT * FROM staged")
 
     # 2. Diff against the current state (open versions) by content hash.
     snap = (con.execute("SELECT max(snapshot) FROM snapshots WHERE dataset=?", [dataset]).fetchone()[0] or 0) + 1
@@ -158,8 +161,9 @@ def ingest(dataset: str, path: str | Path, adapter: str | None = None, sync: boo
         return None
 
     # 3. Store new contents once, close replaced/deleted versions, open new ones.
-    con.execute("""INSERT INTO doc_contents SELECT content_hash, any_value(title), any_value(text) FROM incoming
-                   WHERE content_hash NOT IN (SELECT content_hash FROM doc_contents) GROUP BY content_hash""")
+    con.execute("""INSERT INTO doc_contents SELECT content_hash, title, text FROM staged WHERE rowid IN (
+                     SELECT min(rowid) FROM staged WHERE content_hash NOT IN (SELECT content_hash FROM doc_contents)
+                     GROUP BY content_hash)""")
     con.execute("""UPDATE doc_versions SET valid_to = $snap WHERE dataset = $ds AND valid_to IS NULL AND doc_id IN (
                      SELECT i.doc_id FROM incoming i JOIN cur c USING (doc_id) WHERE i.content_hash <> c.content_hash)""",
                 {"snap": snap, "ds": dataset})
@@ -202,15 +206,14 @@ def _upsert_questions(con, dataset: str, qs: list[dict]) -> None:
     print(f"  {len(qs)} questions")
 
 
-# A dataset is a folder under data/datasets/<name>/ holding documents (.txt, .md,
-# .jsonl) and a questions.jsonl. Folders get there three ways: EnterpriseRAG-Bench's
-# built-in download, a Python extractor that downloads public data into the folder,
-# or by putting files there yourself. Loading a folder reads it into the document
-# store as a new snapshot (only what changed).
+# A dataset has two steps, each its own button on the Datasets page:
+#   Download  a Python extractor puts the raw files in data/datasets/<name>/ (or you copy them there).
+#   Load      parse that folder into rag-lab's internal document store (data/corpus.duckdb) as a
+#             snapshot: normalized documents + questions. Pipelines read from the store, never the folder.
 SOURCES = {
     "enterprise_rag_bench": "EnterpriseRAG-Bench: downloads the release, loads ~500k docs and 500 questions, builds a dev subset",
-    "extract": "Python extractor: a script downloads data (e.g. a public benchmark) into the dataset's folder, then it is loaded",
-    "folder": "Load (or reload) what is in the dataset's folder",
+    "extract": "Download: run the dataset's Python extractor, which writes raw files into its folder (no loading)",
+    "folder": "Load: read the dataset's folder into the internal document store as a new snapshot",
 }
 EXTRACTOR_FILE = "extract.py"           # an extractor script lives in its dataset's folder
 NAME_RE = r"[A-Za-z0-9_-]{1,64}"
@@ -258,16 +261,17 @@ def ingest_source(dataset: str, source: str, params: dict, sync: bool = False) -
             build_subset(dataset, "dev", distractors=int(params.get("distractors", 20_000)))
         return snap
     folder = dataset_dir(dataset)
-    if source == "extract":
+    if source == "extract":             # download only; loading is its own step
         run_extractor(folder, params.get("code") or "")
+        print(f"Downloaded into {folder}. Press Load to read it into the document store.")
+        return None
+    if source == "folder":
+        if not folder.is_dir():
+            raise SystemExit(f"No folder {folder}. Download it or put the dataset's files there first.")
         if dataset == BENCH:            # its documents stay zipped; read with its own reader, then build "dev"
             snap = ingest(dataset, folder, adapter=BENCH, sync=True, note="EnterpriseRAG-Bench release")
             build_subset(dataset, "dev")
             return snap
-        return ingest(dataset, folder, adapter="folder", sync=True, note="extractor")
-    if source == "folder":
-        if not folder.is_dir():
-            raise SystemExit(f"No folder {folder}. Put the dataset's files there first.")
         return ingest(dataset, folder, adapter="folder", sync=sync, note="folder")
     raise SystemExit(f"Unknown data source {source!r}. Available: {sorted(SOURCES)}")
 

@@ -28,7 +28,7 @@ from .stages.transform import docs_file as transform_docs_file
 # Stage stats worth showing next to a node in the UI.
 STAT_KEYS = {"n_docs", "n_chunks", "docs_chunked", "docs_reused", "avg_chars", "max_chars", "n", "dim", "embedded", "reused",
              "mode", "docs_written", "docs_skipped", "docs_deleted", "chunks_written", "target_version",
-             "n_questions", "abstained", "refusals", "judged", "docs_in", "dropped", "changed", "chars_in", "chars_out", "passthrough"}
+             "n_questions", "abstained", "refusals", "judged", "docs_in", "dropped", "changed", "chars_in", "chars_out", "passthrough", "searches"}
 
 # Files copied from stage cache dirs into the run folder (small, human-readable).
 ARTIFACTS = {

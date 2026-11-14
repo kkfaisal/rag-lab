@@ -348,6 +348,9 @@ progress survives an interrupted run.
 Free on every benchmark (no LLM):
 
 - `recall@k`: share of gold documents among the top-k retrieved documents
+- `ndcg@10`: like recall@10, but gold documents ranked higher count more (binary relevance; the metric
+  BEIR papers report)
+- `mrr@10`: 1 / rank of the first gold document in the top 10 (0 if none)
 - `context_recall`: share of gold documents that reached the LLM prompt
 - `answer_recall` / `extra_docs`: gold documents among, and non-gold documents in, the answer's document ids
 - `abstained`: share of questions the model declined to answer
@@ -356,6 +359,25 @@ With answers and an API key: `correctness` and `completeness`. EnterpriseRAG-Ben
 benchmark's own judge (run with `--no-correction`, which also yields `judge_doc_recall` and
 `invalid_extra_docs`; its token costs are not tracked). Other datasets use the built-in generic
 judge: one Claude call per question comparing the answer with the gold answer; its cost is tracked.
+
+**Is B really better than A?** The Compare page runs a paired test on the questions both runs
+answered: the mean difference with a 95% bootstrap confidence interval, a paired permutation test
+(p-value), and how many questions each run won. It says plainly when a gap could be noise, and
+warns below 30 questions. With 20 questions, differences of 10 points or more are often noise.
+
+## Generating answers: single pass or agentic
+
+A retrieval pipeline's generate node answers each question with Claude:
+
+- **`llm`** (single pass): the top `context_chunks` chunks (after reranking) go into one prompt; Claude
+  answers once, citing the numbered documents it used, or says the answer is not in them.
+- **`agent`** (agentic RAG): Claude starts from the same chunks and has a `search` tool over the same
+  target (hybrid by default). It can rephrase, search for each part of a question, follow names it
+  found, and then calls an `answer` tool. `max_searches` (default 5) caps the extra searches. Each
+  question's page lists the searches it made. Its `context_recall` counts every document it saw.
+
+Both write the same answer files, so the same metrics and judges apply and runs compare directly.
+The default prompts are dataset-neutral; edit `system_prompt` on the node to add domain context.
 
 ## What a run folder holds
 
@@ -408,6 +430,8 @@ at a time, each in its own subprocess, with a log you can open in the UI.
   `stages/`; its Pydantic config becomes a settings form automatically.
 - **Target type**: subclass `Target` in `targets/` and decorate with `@register_target("name", Config)`.
 - **Dataset adapter**: subclass `Dataset` in `datasets/`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and worked examples.
 
 ## Notes and limits
 

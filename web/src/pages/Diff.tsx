@@ -4,7 +4,26 @@ import { fmt, get, type RunRow } from '../api'
 import { PageHead } from '../components/ui'
 
 interface DiffRow { question_id: string; category: string; question: string; a: number | null; b: number | null; status: string }
-interface DiffData { metric: string; snapshots: number[]; metrics: string[]; counts: Record<string, number>; rows: DiffRow[] }
+interface PairedTest { n: number; mean_a: number | null; mean_b: number | null; delta: number | null; ci95: [number, number] | null; p_value: number | null
+  b_better: number; a_better: number; ties: number; significant: boolean; verdict: string }
+interface DiffData { metric: string; test: PairedTest; snapshots: (number | null)[]; metrics: string[]; counts: Record<string, number>; rows: DiffRow[] }
+
+// Is the difference between the runs real? Mean of each, the gap with its 95% interval, and a paired test.
+function Verdict({ t, metric }: { t: PairedTest; metric: string }) {
+  if (!t.n || t.delta === null) return null
+  const sign = (v: number) => (v > 0 ? '+' : '') + fmt(v)
+  return (
+    <div className={`card verdict ${t.significant ? (t.delta > 0 ? 'better' : 'worse') : 'noise'}`} style={{ margin: '10px 0' }}>
+      <div className="stats">
+        <div className="stat"><div className="v">{fmt(t.mean_a)}</div><div className="k">A · mean {metric}</div></div>
+        <div className="stat"><div className="v">{fmt(t.mean_b)}</div><div className="k">B · mean {metric}</div></div>
+        <div className="stat"><div className="v">{sign(t.delta)}</div><div className="k">difference B − A</div></div>
+        <div className="stat"><div className="v">{t.ci95 ? `${sign(t.ci95[0])} … ${sign(t.ci95[1])}` : '–'}</div><div className="k">95% confidence interval</div></div>
+        <div className="stat"><div className="v">{t.b_better} / {t.a_better} / {t.ties}</div><div className="k">questions B better / A better / tied</div></div>
+      </div>
+      <p style={{ margin: '8px 0 0' }}><b>{t.verdict}.</b> <span className="small muted">Paired permutation test over {t.n} questions; the interval is a bootstrap over questions. If it includes 0, the runs can’t be told apart on this metric.</span></p>
+    </div>)
+}
 
 export default function Diff() {
   const [params, setParams] = useSearchParams()
@@ -31,16 +50,17 @@ export default function Diff() {
   const rows = data?.rows.filter(r => r.status === tab) ?? []
   return (
     <>
-      <PageHead title="Compare two runs" sub="Question by question: “fixed” means the metric went up from A to B, “broken” means it went down." />
+      <PageHead title="Compare two runs" sub="Whether B really beats A on the same questions, or the gap is noise; then question by question: “fixed” means the metric went up from A to B, “broken” means it went down." />
       <div className="row" style={{ margin: '8px 0' }}>
         {pick('a', a)} → {pick('b', b)}
         {data && <select value={data.metric} onChange={e => set('metric', e.target.value)}>
           {data.metrics.map(m => <option key={m}>{m}</option>)}</select>}
       </div>
       {error && <p className="pill miss">{error}</p>}
-      {data && data.snapshots[0] !== data.snapshots[1] &&
+      {data && data.snapshots[0] !== null && data.snapshots[0] !== data.snapshots[1] &&
         <p className="small muted">Note: A uses snapshot {data.snapshots[0]}, B uses snapshot {data.snapshots[1]} — the documents differ, not just the pipeline.</p>}
       {data && <>
+        <Verdict t={data.test} metric={data.metric} />
         <div className="tabs">{['fixed', 'broken', 'same', 'n/a'].map(s => (
           <button key={s} className={tab === s ? 'active' : ''} onClick={() => setTab(s)}>{s} ({data.counts[s]})</button>))}</div>
         <div className="table-wrap"><table>

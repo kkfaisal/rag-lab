@@ -45,6 +45,9 @@ export default function QuestionPage() {
           <h2>Generated answer {d.generation?.abstained && <span className="pill extra">abstained</span>}
             {d.generation?.stop_reason === 'refusal' && <span className="pill miss">refusal</span>}</h2>
           <div className="card answer">{d.answer?.answer ?? <span className="muted">(no answer — retrieval-only run)</span>}</div>
+          {(d.generation?.searches?.length ?? 0) > 0 && <>
+            <h2>Agent searches ({d.generation!.searches!.length})</h2>
+            <ol className="small">{d.generation!.searches!.map((q, i) => <li key={i}><code>{q.query}</code> <span className="muted">· {q.hits} passages, {q.new_docs} new documents</span></li>)}</ol></>}
           {typeof m.judge_reasoning === 'string' && <>
             <h2>Judge: {m.correctness === 100 ? <span className="pill hit">correct</span> : <span className="pill miss">incorrect</span>}</h2>
             <div className="card small answer">{m.judge_reasoning}</div></>}

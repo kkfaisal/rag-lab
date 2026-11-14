@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from . import bench, data, jobs, paths, scripting, tracking, workspace
+from . import bench, data, jobs, paths, scripting, stats, tracking, workspace
 from .targets import TARGETS, Manifest, TargetError, open_target
 
 load_dotenv(paths.ROOT / ".env")
@@ -192,14 +192,14 @@ def heatmap(metric: str = "recall@10", dataset: str | None = None):
 
 @app.get("/api/diff")
 def diff(a: str, b: str, metric: str | None = None):
-    """Per-question comparison of two runs on one metric. Default metric:
-    correctness if both runs were judged, else answer_recall."""
+    """Per-question comparison of two runs on one metric, with a paired significance test
+    (stats.py). Default metric: correctness if both runs were judged, else recall@10."""
     da, db = (_json(_run_dir(x) / "config.json")["data"] for x in (a, b))
     if da["dataset"] != db["dataset"]:
         raise HTTPException(400, f"Can't compare runs on different datasets ({da['dataset']} vs {db['dataset']})")
     pa, pb = (_jsonl(_run_dir(x) / "per_question.jsonl") for x in (a, b))
     if metric is None:
-        metric = "correctness" if pa and pb and "correctness" in pa[0] and "correctness" in pb[0] else "answer_recall"
+        metric = "correctness" if pa and pb and "correctness" in pa[0] and "correctness" in pb[0] else "recall@10"
     ib = {r["question_id"]: r for r in pb}
     texts = _question_texts(da["dataset"])
     rows = []
@@ -212,7 +212,9 @@ def diff(a: str, b: str, metric: str | None = None):
         rows.append({"question_id": ra["question_id"], "category": ra["category"], "question": texts.get(ra["question_id"]),
                      "a": va, "b": vb, "status": status})
     counts = {s: sum(r["status"] == s for r in rows) for s in ["fixed", "broken", "same", "n/a"]}
-    return {"metric": metric, "snapshots": [da["snapshot"], db["snapshot"]], "metrics": sorted({k for r in pa[:1] for k in r} - {"question_id", "category", "judge_reasoning"}),
+    scored = [r for r in rows if r["a"] is not None and r["b"] is not None]
+    test = stats.paired([r["a"] for r in scored], [r["b"] for r in scored])
+    return {"metric": metric, "test": test, "snapshots": [da.get("snapshot"), db.get("snapshot")], "metrics": sorted({k for r in pa[:1] for k in r} - {"question_id", "category", "judge_reasoning"}),
             "counts": counts, "rows": rows}
 
 

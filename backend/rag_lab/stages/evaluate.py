@@ -3,6 +3,8 @@
 Two layers:
   1. Free, deterministic retrieval metrics computed here (no LLM):
        recall@k        share of gold docs among the top-k retrieved docs
+       ndcg@10         like recall@10, but a gold doc ranked higher counts more (the BEIR leaderboard metric)
+       mrr@10          1 / rank of the first gold doc in the top 10 (0 if none): how soon the first hit comes
        context_recall  share of gold docs that made it into the LLM prompt
        answer_recall   share of gold docs in the answer's document_ids
        extra_docs      answer document_ids that are not gold
@@ -16,6 +18,7 @@ Outputs per_question.jsonl and metrics.json ({"overall": {...}, "by_category": {
 """
 
 import json
+import math
 
 from pydantic import BaseModel
 
@@ -81,6 +84,21 @@ def llm_judge(cfg, ctx: StageContext, rows: list[dict], answers: dict) -> dict:
     return total.to_dict()
 
 
+def _ndcg(ranked: list[str], gold: set[str], k: int = 10) -> float | None:
+    """Binary-relevance nDCG@k, as a percentage: DCG of the ranking / DCG of a perfect ranking."""
+    if not gold:
+        return None
+    dcg = sum(1 / math.log2(i + 2) for i, d in enumerate(ranked[:k]) if d in gold)
+    ideal = sum(1 / math.log2(i + 2) for i in range(min(len(gold), k)))
+    return round(100 * dcg / ideal, 2)
+
+
+def _mrr(ranked: list[str], gold: set[str], k: int = 10) -> float | None:
+    if not gold:
+        return None
+    return round(100 * next((1 / (i + 1) for i, d in enumerate(ranked[:k]) if d in gold), 0.0), 2)
+
+
 def _recall(found: list[str], gold: set[str]) -> float | None:
     return round(100 * len(gold & set(found)) / len(gold), 2) if gold else None
 
@@ -109,6 +127,8 @@ def standard_eval(cfg: StandardEvalConfig, ctx: StageContext) -> dict:
         row = {"question_id": qid, "category": q["category"]}
         for k in cfg.recall_k:
             row[f"recall@{k}"] = _recall(retrieved[qid][:k], gold)
+        row["ndcg@10"] = _ndcg(retrieved[qid], gold)
+        row["mrr@10"] = _mrr(retrieved[qid], gold)
         row["context_recall"] = _recall(gens[qid]["context_doc_ids"], gold)
         row["answer_recall"] = _recall(ans_docs, gold)
         row["extra_docs"] = len(set(ans_docs) - gold) if gold else None

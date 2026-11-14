@@ -61,7 +61,7 @@ export interface QuestionDetail {
   question: { question_id: string; category: string; question: string; gold_answer: string; expected_doc_ids: string[]; answer_facts: string[]; source_types: string[] }
   retrieval: Chunk[]
   reranked: Chunk[] | null
-  generation: { context_doc_ids: string[]; cited_doc_ids: string[]; abstained: boolean; stop_reason: string | null; model: string | null; raw: string | null } | null
+  generation: { context_doc_ids: string[]; cited_doc_ids: string[]; abstained: boolean; stop_reason: string | null; model: string | null; raw: string | null; searches?: { query: string; hits: number; new_docs: number }[] } | null
   answer: { answer: string | null; document_ids: string[] } | null
   metrics: Record<string, unknown> | null
   docs: Record<string, { doc_id: string; source: string; title: string; path: string }>

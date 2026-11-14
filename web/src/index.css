@@ -255,3 +255,7 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--surf
 .chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .chain-step { display: inline-flex; gap: 4px; align-items: center; }
 .chain .chip { font-size: 11.5px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); white-space: nowrap; }
+
+/* ---- compare verdict ---- */
+.verdict { border-left: 3px solid var(--border-strong); }
+.verdict.better { border-left-color: var(--ok); } .verdict.worse { border-left-color: var(--bad); } .verdict.noise { border-left-color: var(--warn); }

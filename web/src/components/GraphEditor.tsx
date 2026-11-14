@@ -21,7 +21,7 @@ const DEFAULT_IMPL: Record<string, string> = {
 const HELP: Record<string, string> = {
   source: 'Documents of a dataset', transform: 'Clean, rewrite or filter documents (optional)', chunk: 'Split documents into pieces', embed: 'Turn chunks into vectors',
   target: 'The store chunks are written to / searched in', retrieve: 'Find candidate chunks for a question',
-  rerank: 'Re-score the candidates', generate: 'Answer with an LLM', benchmark: 'Score against the dataset\'s questions',
+  rerank: 'Re-score the candidates', generate: 'Answer with Claude: single pass (llm) or agentic (agent)', benchmark: 'Score against the dataset\'s questions',
 }
 
 type RFData = { node: GraphNode; first: boolean; last: boolean; title: string; summary: string }

@@ -316,3 +316,62 @@ def test_graphs_compile_to_configs():
     cfg, meta, limit = workspace.compile_benchmark(ret)
     assert cfg["target"] == {"id": t1["id"]} and cfg["rerank"] == {"impl": "none"} and limit == 7 and cfg["evaluate"]["judge"] is False
     assert workspace.compile_benchmark(ret, t2["id"])[1]["target_name"] == "Store B"       # run-time target override
+
+
+# ---- metrics, significance, agentic RAG
+
+def test_ranking_metrics():
+    from rag_lab.stages.evaluate import _mrr, _ndcg
+    assert _ndcg(["a", "b"], {"a", "b"}) == 100.0 and _ndcg(["x", "y"], {"a"}) == 0.0
+    assert 0 < _ndcg(["x", "a"], {"a"}) < _ndcg(["a", "x"], {"a"}) == 100.0      # rank matters
+    assert _mrr(["x", "y", "a"], {"a"}) == 33.33 and _ndcg([], set()) is None
+
+
+def test_paired_significance():
+    from rag_lab import stats
+    a = [float(i % 7) * 10 for i in range(200)]
+    assert stats.paired(a, [x + 5 for x in a])["significant"]                  # a consistent gain is detected
+    noisy = stats.paired([0, 100, 0, 100, 100], [100, 100, 0, 0, 100])
+    assert not noisy["significant"] and "Only 5 questions" in noisy["verdict"]
+    assert stats.paired(a, a)["p_value"] == 1.0
+
+
+class _Block:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class _FakeClaude:
+    """Stands in for anthropic.Anthropic: first asks for one search, then answers citing document 1."""
+    calls = []
+
+    def __init__(self, **_):
+        self.messages = self
+
+    def create(self, **kw):
+        _FakeClaude.calls.append(kw)
+        usage = _Block(input_tokens=10, output_tokens=5, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+        if len(kw["messages"]) == 1:
+            content = [_Block(type="tool_use", id="t1", name="search", input={"query": "leeds warehouse"})]
+        else:
+            content = [_Block(type="tool_use", id="t2", name="answer", input={"found": True, "answer": "Leeds", "sources": [1]})]
+        return _Block(content=content, usage=usage, stop_reason="tool_use", model=kw["model"])
+
+
+def test_agentic_generate_searches_then_answers(tmp_path, monkeypatch):
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _FakeClaude)
+    _questions(tmp_path, [{"question_id": "q1", "question": "where do orders ship from", "expected_doc_ids": ["b.txt"]}])
+    _dataset(tmp_path, "agent", {"a.txt": "Refunds\nrefunds within fourteen days", "b.txt": "Shipping\norders ship from leeds"})
+    target = workspace.save_target({"name": "T agent", "type": "local", "params": {}})
+    pipeline.run_ingest(_ingest_cfg("agent", target["id"]))
+    run_dir = paths.RUNS / pipeline.run_benchmark({
+        "name": "agent", "target": {"id": target["id"]}, "retrieve": {"impl": "bm25", "top_k": 1},
+        "generate": {"impl": "agent", "max_searches": 2}, "evaluate": {"impl": "standard", "judge": False}})
+    gen = json.loads((run_dir / "generations.jsonl").read_text())
+    ans = json.loads((run_dir / "answers.jsonl").read_text())
+    assert gen["searches"][0]["query"] == "leeds warehouse" and ans["answer"] == "Leeds"
+    assert ans["document_ids"] == [gen["context_doc_ids"][0]]                   # "sources": [1] = first document seen
+    tool_result = _FakeClaude.calls[-1]["messages"][-1]["content"][0]
+    assert tool_result["type"] == "tool_result" and "leeds" in tool_result["content"]
+    assert json.loads((run_dir / "metrics.json").read_text())["overall"]["ndcg@10"] is not None

@@ -214,11 +214,11 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
                 {catalog.has_api_key ? '' : ' No ANTHROPIC_API_KEY is set, so LLM answers and judging are off.'}</span></div>
             </div>)}
 
-          {info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} scriptKind={sel.stage}
+          {info && <ParamForm key={`form:${sel.id}:${sel.impl}`} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} scriptKind={sel.stage}
             versionKey={graph.id ? `${kind}/${graph.id}/${sel.id}` : undefined}
             onSaveScript={onSaveScript && (code => { update(sel.id, { params: { ...sel.params, code } }); return onSaveScript(sel.id, code) })} />}
 
-          {info?.source && sel.impl !== 'python' && <BuiltinCode key={sel.id + sel.impl} node={sel} info={info}
+          {info?.source && sel.impl !== 'python' && <BuiltinCode key={`code:${sel.id}:${sel.impl}`} node={sel} info={info}
             onConvert={params => update(sel.id, { impl: 'python', params })} />}
           {extra?.(sel, { ...graph, nodes: nodes.map(n => n.data.node), edges })}
         </>}

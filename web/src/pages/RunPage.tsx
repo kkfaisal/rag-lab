@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { fmt, get, heat, isPct, type QuestionRow, type RunDetail } from '../api'
+import { MetricHelp, Term } from '../components/Glossary'
 
 const display = (v: unknown) => (typeof v === 'object' ? JSON.stringify(v) : String(v))
 const STAGES = ['target', 'retrieve', 'rerank', 'generate', 'evaluate']
@@ -68,6 +69,7 @@ export default function RunPage() {
           <div className="row"><select value={metric} onChange={e => setMetric(e.target.value)}>
             {metricNames.map(m => <option key={m}>{m}</option>)}</select>
             <span className="muted small">overall: <b>{fmt(d.metrics.overall?.[metric])}</b></span></div>
+          <MetricHelp metric={metric} />
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={chart} margin={{ top: 12, right: 8, bottom: 48, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
@@ -95,7 +97,7 @@ export default function RunPage() {
       </div>
 
       <div className="table-wrap"><table style={{ marginTop: 12 }}>
-        <thead><tr><th>category</th>{metricNames.concat('n').map(m => <th key={m} className="num">{m}</th>)}</tr></thead>
+        <thead><tr><th>category</th>{metricNames.concat('n').map(m => <th key={m} className="num"><Term k={m} /></th>)}</tr></thead>
         <tbody>{Object.entries({ overall: d.metrics.overall ?? {}, ...d.metrics.by_category }).map(([cat, m]) => (
           <tr key={cat}><td><b>{cat}</b></td>{metricNames.concat('n').map(k => (
             <td key={k} className="num" style={{ background: isPct(k) && k !== 'abstained' ? heat(m[k]) : undefined }}>{fmt(m[k])}</td>))}</tr>
@@ -105,7 +107,7 @@ export default function RunPage() {
       <div className="section-title">Questions</div>
       <div className="table-wrap"><table>
         <thead><tr><th>id</th><th>category</th><th>question</th>
-          {['recall@10', 'answer_recall', 'correctness', 'completeness'].map(m => <th key={m} className="num">{m}</th>)}</tr></thead>
+          {['recall@10', 'answer_recall', 'correctness', 'completeness'].map(m => <th key={m} className="num"><Term k={m} /></th>)}</tr></thead>
         <tbody>{qs.map(q => (
           <tr key={q.question_id}>
             <td><Link to={`/runs/${runId}/q/${q.question_id}`}>{q.question_id}</Link></td>

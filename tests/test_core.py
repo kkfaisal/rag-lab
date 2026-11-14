@@ -375,3 +375,24 @@ def test_agentic_generate_searches_then_answers(tmp_path, monkeypatch):
     tool_result = _FakeClaude.calls[-1]["messages"][-1]["content"][0]
     assert tool_result["type"] == "tool_result" and "leeds" in tool_result["content"]
     assert json.loads((run_dir / "metrics.json").read_text())["overall"]["ndcg@10"] is not None
+
+
+def test_script_versions_record_only_changes():
+    from rag_lab import versions
+    g = workspace.save_graph("retrieval", {"name": "Versioned", "nodes": [
+        {"id": "r", "stage": "retrieve", "impl": "python", "params": {"code": "def retrieve(q, s, k):\n    return s.bm25(q, k)\n"}, "position": {"x": 0, "y": 0}}]})
+    versions.record_graph("retrieval", g)
+    versions.record_graph("retrieval", g)                                      # unchanged: no new version
+    g["nodes"][0]["params"]["code"] += "# v2\n"
+    versions.record_graph("retrieval", g)
+    key = f"retrieval/{g['id']}/r"
+    assert [v["version"] for v in versions.listing(key)] == [2, 1]             # newest first
+    assert versions.get(key, 2)["code"].endswith("# v2\n") and "code" not in versions.listing(key)[0]
+    with pytest.raises(ValueError):
+        versions.listing("../../etc/passwd")
+
+
+def test_run_ids_are_readable():
+    from datetime import datetime
+    rid = pipeline.run_id("x", {"pipeline_name": "Hybrid + rerank", "target_name": "Local store"}, datetime(2026, 11, 14, 18, 47))
+    assert rid == "hybrid-rerank_local-store_2026_11_14_sat_18_47"

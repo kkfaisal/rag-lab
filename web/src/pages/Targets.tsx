@@ -90,7 +90,7 @@ export default function Targets() {
             <div className="field"><label>Description</label><input value={edit.description} onChange={e => setEdit({ ...edit, description: e.target.value })} /></div>
           </div>
           <div className="section-title">{TYPE_LABEL[edit.type] ?? edit.type} settings</div>
-          {info && <ParamForm key={(edit.id ?? 'new') + edit.type} info={info} params={edit.params} onChange={p => { setEdit({ ...edit, params: p }); setConn(null) }} scriptKind="target" />}
+          {info && <ParamForm key={(edit.id ?? 'new') + edit.type} info={info} params={edit.params} onChange={p => { setEdit({ ...edit, params: p }); setConn(null) }} scriptKind="target" versionKey={edit.id ? `targets/${edit.id}` : undefined} />}
           {['opensearch', 'elasticsearch', 'qdrant'].includes(edit.type) && <div className="notice">Credentials are read from environment variables you name here (set them in <code>.env</code>), never stored in the target.</div>}
           {['pgvector', 'sql'].includes(edit.type) && <div className="notice">Write secrets in the URL as <code>{'${NAME}'}</code>, e.g. <code>{'postgresql://raglab:${POSTGRES_PASSWORD}@localhost:5433/raglab'}</code>. They are read from the environment (<code>.env</code>) when connecting, never stored in the target.</div>}
           <div className="row conn-test">

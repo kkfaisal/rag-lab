@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fmt, get, heat, isPct } from '../api'
+import { MetricHelp } from '../components/Glossary'
 import { PageHead } from '../components/ui'
 
 interface Cell { run_id: string; name: string; created_at: string; snapshot: number; category: string; value: number }
@@ -29,6 +30,7 @@ export default function Heatmap() {
         <select value={metric} onChange={e => setMetric(e.target.value)}>
           {data.metrics.filter(m => m !== 'n').map(m => <option key={m}>{m}</option>)}
         </select>
+        <MetricHelp metric={metric} />
         <span className="muted small">Green = high, red = low. Empty = metric not computed for that run (e.g. no judge).</span>
       </div>
       <div className="table-wrap"><table className="heat">

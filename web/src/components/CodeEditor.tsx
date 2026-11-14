@@ -9,7 +9,8 @@ const dark = () => window.matchMedia('(prefers-color-scheme: dark)').matches
 interface Contract { template: string; required: string[]; optional: string[] }
 interface ScriptsInfo { contracts: Record<string, Contract>; assist: boolean; assist_model: string }
 interface Check { ok: boolean; message: string; line: number | null }
-interface Proposal { code: string; explanation: string; model: string; cost_usd: number }
+interface Proposal { code: string; explanation: string; model: string; cost_usd: number; version?: number }
+interface Version { version: number; saved_at: string; note: string; lines: number }
 
 let infoPromise: Promise<ScriptsInfo> | null = null
 const scriptsInfo = () => (infoPromise ??= get<ScriptsInfo>('/api/scripts/info'))
@@ -21,32 +22,42 @@ const KIND_LABEL: Record<string, string> = {
 
 // A Python editor for script nodes, data-source scripts and script targets.
 // Inline it is compact; "Open editor" opens a full-window editor with a static check,
-// the stage's contract, and optional AI help that proposes changes as a diff.
-export default function CodeEditor({ value, onChange, height = '320px', readOnly = false, kind, title }: {
+// the stage's contract, saved versions, and optional AI help that proposes changes as a diff.
+//   versionKey   where this script's saved versions live (see backend versions.py)
+//   onStudioSave lets the full-window editor edit a read-only script (e.g. a built-in node's
+//                code: saving turns the node into a Python node); `notice` explains that
+export default function CodeEditor({ value, onChange, height = '320px', readOnly = false, kind, title, versionKey, onStudioSave, notice }: {
   value: string; onChange?: (v: string) => void; height?: string; readOnly?: boolean; kind?: string; title?: string
+  versionKey?: string; onStudioSave?: (v: string) => void; notice?: string
 }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="code-editor">
       <div className="code-bar">
         <span className="small faint">{readOnly ? 'Python · read-only' : 'Python'}</span>
-        <button className="sm ghost" onClick={() => setOpen(true)} title="Open a full-window editor">⤢ {readOnly ? 'Expand' : 'Open editor'}</button>
+        <button className="sm ghost" onClick={() => setOpen(true)} title="Open a full-window editor">⤢ {readOnly && !onStudioSave ? 'Expand' : 'Open editor'}</button>
       </div>
       <CodeMirror value={value} height={height} theme={dark() ? 'dark' : 'light'} extensions={[python()]}
         basicSetup={{ foldGutter: false, highlightActiveLine: false }} onChange={onChange} readOnly={readOnly} editable={!readOnly} />
-      {open && <Studio initial={value} readOnly={readOnly} kind={kind} title={title}
-        onClose={() => setOpen(false)} onSave={v => { onChange?.(v); setOpen(false) }} />}
+      {open && <Studio initial={value} readOnly={readOnly && !onStudioSave} kind={kind} title={title} versionKey={versionKey} notice={notice}
+        onClose={() => setOpen(false)} onSave={v => { (onStudioSave ?? onChange)?.(v); setOpen(false) }} />}
     </div>
   )
 }
 
-function Studio({ initial, readOnly, kind, title, onClose, onSave }: {
-  initial: string; readOnly: boolean; kind?: string; title?: string; onClose: () => void; onSave: (v: string) => void
+function Studio({ initial, readOnly, kind, title, versionKey, notice, onClose, onSave }: {
+  initial: string; readOnly: boolean; kind?: string; title?: string; versionKey?: string; notice?: string
+  onClose: () => void; onSave: (v: string) => void
 }) {
   const [draft, setDraft] = useState(initial)
   const [info, setInfo] = useState<ScriptsInfo | null>(null)
   const [check, setCheck] = useState<Check | null>(null)
-  const [tab, setTab] = useState<'ai' | 'contract'>(readOnly ? 'contract' : 'ai')
+  const [tab, setTab] = useState<'ai' | 'contract' | 'versions'>(readOnly ? 'contract' : 'ai')
+  const [versions, setVersions] = useState<Version[] | null>(null)
+  useEffect(() => { if (versionKey) get<Version[]>(`/api/scripts/versions?key=${encodeURIComponent(versionKey)}`).then(setVersions).catch(() => setVersions([])) }, [versionKey])
+  const pickVersion = (v: Version) => get<{ code: string }>(`/api/scripts/versions/${v.version}?key=${encodeURIComponent(versionKey!)}`)
+    .then(r => setProposal({ code: r.code, explanation: `Version ${v.version} · saved ${v.saved_at.replace('T', ' ')}`, model: '', cost_usd: 0, version: v.version }))
+    .catch(e => setErr(errText(e)))
   const [ask, setAsk] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -64,7 +75,7 @@ function Studio({ initial, readOnly, kind, title, onClose, onSave }: {
   const close = () => { if (!changed || readOnly || confirm('Discard your changes to this script?')) onClose() }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !proposal) close()
+      if (e.key === 'Escape') { if (proposal?.version !== undefined) setProposal(null); else if (!proposal) close() }   // Esc = Back from a version
       if ((e.metaKey || e.ctrlKey) && e.key === 's' && !readOnly) { e.preventDefault(); onSave(draft) }
     }
     window.addEventListener('keydown', onKey)
@@ -79,7 +90,7 @@ function Studio({ initial, readOnly, kind, title, onClose, onSave }: {
   }
   const decide = (accept: boolean) => {
     if (accept && proposal) setDraft(proposal.code)
-    setLog(l => l.map((x, i) => i === l.length - 1 ? { ...x, accepted: accept } : x))
+    if (proposal?.version === undefined) setLog(l => l.map((x, i) => i === l.length - 1 ? { ...x, accepted: accept } : x))
     setProposal(null)
   }
   const mergeExt = useMemo(() => proposal ? [python(), unifiedMergeView({ original: draft, mergeControls: false })] : [], [proposal]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -97,6 +108,7 @@ function Studio({ initial, readOnly, kind, title, onClose, onSave }: {
         <div className="studio-head">
           <b>{title ?? (kind ? KIND_LABEL[kind] ?? kind : 'Python')}</b>
           {readOnly && <span className="pill plain">read-only</span>}
+          {notice && !readOnly && <span className="small muted">{notice}</span>}
           {changed && !readOnly && <span className="pill warn">unsaved</span>}
           {check && <span className={`small ${check.ok ? 'ok-text' : 'bad-text'}`} title={check.message}>{check.ok ? '✓ ' : '✕ '}{check.message}</span>}
           <span className="grow" />
@@ -109,10 +121,12 @@ function Studio({ initial, readOnly, kind, title, onClose, onSave }: {
           <div className="studio-code">
             {proposal ? <>
               <div className="proposal-bar">
-                <span className="small"><b>Suggested change</b> · {proposal.model} · ${proposal.cost_usd.toFixed(4)}</span>
+                {proposal.version !== undefined
+                  ? <span className="small"><b>{proposal.explanation}</b> · shown as changes from the code in the editor</span>
+                  : <span className="small"><b>Suggested change</b> · {proposal.model} · ${proposal.cost_usd.toFixed(4)}</span>}
                 <span className="grow" />
-                <button className="sm" onClick={() => decide(false)}>Discard</button>
-                <button className="sm primary" onClick={() => decide(true)}>Accept change</button>
+                <button className="sm" onClick={() => decide(false)}>{proposal.version !== undefined ? 'Back' : 'Discard'}</button>
+                {!readOnly && <button className="sm primary" onClick={() => decide(true)}>{proposal.version !== undefined ? 'Use this version' : 'Accept change'}</button>}
               </div>
               <CodeMirror key="proposal" value={proposal.code} height="100%" className="cm-fill" theme={dark() ? 'dark' : 'light'}
                 extensions={mergeExt} readOnly editable={false} />
@@ -124,7 +138,19 @@ function Studio({ initial, readOnly, kind, title, onClose, onSave }: {
             <div className="tabs">
               {!readOnly && <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI assist</button>}
               <button className={tab === 'contract' ? 'active' : ''} onClick={() => setTab('contract')}>Contract</button>
+              {versionKey && <button className={tab === 'versions' ? 'active' : ''} onClick={() => setTab('versions')}>Versions{versions?.length ? ` (${versions.length})` : ''}</button>}
             </div>
+            {tab === 'versions' && (
+              <div className="side-pane">
+                <p className="small muted" style={{ marginTop: 0 }}>Every save that changes this script records a version. Pick one to see how it differs from the code in the editor, then use it or go back.</p>
+                {err && <div className="notice bad small">{err}</div>}
+                {versions === null ? <p className="small muted">Loading…</p> : versions.length === 0 ? <p className="small muted">No saved versions yet. The first one is recorded when you save.</p> : (
+                  <div className="version-list">{versions.map((v, i) => (
+                    <button key={v.version} className={`version ${proposal?.version === v.version ? 'active' : ''}`} onClick={() => pickVersion(v)}>
+                      <b>v{v.version}</b>{i === 0 && <span className="pill plain">latest</span>}
+                      <span className="small muted">{v.saved_at.replace('T', ' ').slice(0, 16)} · {v.lines} lines</span>
+                    </button>))}</div>)}
+              </div>)}
             {tab === 'ai' && !readOnly && (
               <div className="side-pane">
                 {info && !info.assist ? (

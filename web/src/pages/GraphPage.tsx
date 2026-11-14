@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { errText, fmt, get, send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type Job, type Target } from '../api'
-import GraphEditor from '../components/GraphEditor'
+import GraphEditor, { type NodeStatus } from '../components/GraphEditor'
 import { isActive, JobList, useJobs } from '../components/Jobs'
 import { Empty, ErrorNote, PageHead, Pill } from '../components/ui'
 
@@ -11,6 +11,55 @@ const TEXT = {
   retrieval: { title: 'Retrieval pipelines', path: '/retrieval', noun: 'retrieval pipeline', job: 'benchmark',
     blurb: 'Target → retrieve → rerank → generate → benchmark. Running a pipeline answers the dataset\'s questions from the target and scores the result.' },
 }
+// Steps of a run in order, and which node each one belongs to.
+const STEPS: Record<GraphKind, [string, string][]> = {
+  ingestion: [['load', 'source'], ['transform', 'transform'], ['chunk', 'chunk'], ['embed', 'embed'], ['write', 'target']],
+  retrieval: [['retrieve', 'retrieve'], ['rerank', 'rerank'], ['generate', 'generate'], ['evaluate', 'benchmark']],
+}
+
+// The latest run of this pipeline, followed live while it is queued or running:
+// a status per node, and a one-line summary for the banner above the canvas.
+function useRunStatus(kind: GraphKind, graph: Graph | undefined, jobs: Job[]) {
+  const mine = graph?.id ? jobs.filter(j => j.spec?.meta?.pipeline_id === graph.id) : []
+  const job = mine.find(isActive) ?? mine[0]
+  const [detail, setDetail] = useState<Job>()
+  const live = job ? isActive(job) : false
+  useEffect(() => {
+    if (!job) { setDetail(undefined); return }
+    let stop = false
+    const load = () => get<Job>(`/api/jobs/${job.id}`).then(d => { if (!stop) setDetail(d) }).catch(() => undefined)
+    load()
+    const t = live ? setInterval(load, 1500) : undefined
+    return () => { stop = true; if (t) clearInterval(t) }
+  }, [job?.id, job?.status, live]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!graph || !job || !detail || detail.id !== job.id) return { job, status: {} as Record<string, NodeStatus>, summary: undefined }
+
+  const logged = new Map((detail.run?.stages ?? []).map(s => [s.stage, s]))
+  const current = detail.run?.current_stage ?? null
+  const steps = STEPS[kind].filter(([, stage]) => graph.nodes.some(n => n.stage === stage))
+  const firstMissing = steps.find(([step]) => !logged.has(step))?.[0]
+  const status: Record<string, NodeStatus> = {}
+  let currentLabel: string | undefined
+  steps.forEach(([step, stage]) => {
+    const s = logged.get(step)
+    const state: NodeStatus['state'] = s ? (s.cached ? 'cached' : 'done')
+      : detail.status === 'queued' ? 'queued'
+      : detail.status === 'running' && (current === step || (!current && step === firstMissing)) ? 'running'
+      : detail.status === 'failed' && step === firstMissing ? 'failed'
+      : detail.status === 'cancelled' && step === firstMissing ? 'cancelled' : 'waiting'
+    if (state === 'running' || state === 'failed') currentLabel = step
+    const note = s ? `${s.cached ? 'cached' : `${fmt(s.duration_s, 1)}s`}` : undefined
+    // Ingestion: the write step belongs to the target node this job writes to; others to every node of the stage.
+    const nodes = stage === 'target' && kind === 'ingestion' ? graph.nodes.filter(n => n.id === job.spec?.meta?.node_id)
+      : graph.nodes.filter(n => n.stage === stage)
+    nodes.forEach(n => { status[n.id] = { state, note } })
+  })
+  if (kind === 'retrieval') graph.nodes.filter(n => n.stage === 'target').forEach(n => { status[n.id] = { state: detail.status === 'queued' ? 'queued' : 'done' } })
+  const idx = steps.findIndex(([step]) => step === currentLabel)
+  const summary = { job: detail, step: currentLabel, index: idx + 1, total: steps.length }
+  return { job, status, summary }
+}
+
 const strip = (g: Graph) => JSON.stringify({ n: g.name, d: g.description, nodes: g.nodes, edges: g.edges })
 
 function blank(kind: GraphKind, dataset: string, target: string): Graph {
@@ -37,6 +86,7 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
   const [runTargets, setRunTargets] = useState<string[] | null>(null)   // retrieval: targets ticked in the run menu
   const jobs = useJobs()
   const busy = jobs.filter(isActive).length
+  const live = useRunStatus(kind, id === 'new' ? undefined : graph, jobs)
 
   const reload = useCallback(() => get<Graph[]>(`/api/graphs/${kind}`).then(setGraphs).catch(e => setError(errText(e))), [kind])
   useEffect(() => {
@@ -133,8 +183,9 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
           {note && <div className="small muted" style={{ marginTop: 6 }}>{note}{dirty ? '' : ' · unsaved edits are saved before a run'}</div>}
         </div>
         <ErrorNote error={error} />
+        {live.summary && <RunBanner s={live.summary} />}
 
-        <GraphEditor key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets} targets={targets}
+        <GraphEditor status={live.status} key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets} targets={targets}
           onChange={setGraph} extra={(n, g) => kind !== 'ingestion' ? null : n.stage === 'chunk' ? <ChunkPreview node={n} graph={g} />
             : n.stage === 'transform' ? <TransformPreview node={n} graph={g} /> : null} />
 
@@ -174,6 +225,29 @@ function PipelineList({ kind, graphs, jobs, targets, onOpen, onCreate }: {
           </tr>)})}</tbody>
     </table></div>)
 }
+
+function RunBanner({ s }: { s: { job: Job; step?: string; index: number; total: number } }) {
+  const j = s.job
+  const since = (t?: string) => t ? Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 1000)) : 0
+  const dur = (sec: number) => sec >= 60 ? `${Math.floor(sec / 60)}m ${sec % 60}s` : `${sec}s`
+  // The run's own progress lines are indented or start with "[stage]"; skip library warnings.
+  const last = (j.log ?? '').split('\n').filter(l => /^\s{2,}\S|^\s*\[/.test(l)).slice(-1)[0]?.trim()
+  const runLink = j.run_id ? <Link to={`/runs/${j.run_id}`}>{j.run_id}</Link> : null
+  if (j.status === 'queued') return <div className="run-banner queued"><span className="pill queued">queued</span> {j.title} · waiting for the job before it to finish</div>
+  if (j.status === 'running') return (
+    <div className="run-banner running"><span className="pill running">running</span>
+      <span><b>{j.title}</b> · step <b>{s.step ?? (s.index === 0 && (j.run?.stages?.length ?? 0) > 0 ? 'finishing' : 'starting')}</b>{s.index > 0 ? ` (${s.index} of ${s.total})` : ''} · {dur(since(j.started_at))}</span>
+      {last && <span className="small muted mono banner-log">{last}</span>}</div>)
+  if (j.status === 'failed') return (
+    <div className="run-banner failed"><span className="pill failed">failed</span>
+      <span><b>{j.title}</b>{s.step ? <> failed at step <b>{s.step}</b></> : ' failed'}: {j.error}</span>
+      <span className="small">{runLink} · <Link to="/jobs">log</Link></span></div>)
+  return (
+    <div className={`run-banner ${j.status}`}><span className={`pill ${j.status}`}>{j.status === 'ok' ? 'last run ok' : j.status}</span>
+      <span className="small">{j.title} · finished {(j.finished_at ?? '').replace('T', ' ').slice(0, 16)}</span>
+      {runLink && <span className="small">{runLink}{kind(j) === 'benchmark' && j.run_id ? <> · <Link to={`/runs/${j.run_id}`}>results →</Link></> : null}</span>}</div>)
+}
+const kind = (j: Job) => j.kind
 
 // Chunk a random real document with the node's current settings (saved or not).
 function ChunkPreview({ node, graph }: { node: GraphNode; graph: Graph }) {

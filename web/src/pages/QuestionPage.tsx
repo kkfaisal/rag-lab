@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { fmt, get, type Chunk, type QuestionDetail } from '../api'
+import { Term } from '../components/Glossary'
 
 function FullDoc({ docId, d }: { docId: string; d: QuestionDetail }) {
   const [text, setText] = useState<string>()
@@ -37,7 +38,7 @@ export default function QuestionPage() {
       <p style={{ fontSize: 16 }}>{d.question.question}</p>
       <div className="row small muted">
         {['recall@1', 'recall@5', 'recall@10', 'recall@20', 'context_recall', 'answer_recall', 'extra_docs', 'correctness', 'completeness', 'invalid_extra_docs']
-          .filter(k => k in m).map(k => <span key={k} className="chip">{k} <b>{fmt(m[k])}</b></span>)}
+          .filter(k => k in m).map(k => <span key={k} className="chip"><Term k={k} /> <b>{fmt(m[k])}</b></span>)}
       </div>
 
       <div className="grid2" style={{ marginTop: 16 }}>

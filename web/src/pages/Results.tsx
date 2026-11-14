@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmt, get, heat, isPct, type MatrixCell } from '../api'
+import { MetricHelp } from '../components/Glossary'
 import { isActive, JobList, useJobs } from '../components/Jobs'
 import { Empty, PageHead } from '../components/ui'
 
@@ -34,6 +35,7 @@ export default function Results() {
       <PageHead title="Results" sub="The latest successful benchmark for each target × retrieval pipeline. Run benchmarks from a retrieval pipeline; tick two cells to compare them question by question.">
         <select value={ds} onChange={e => setDataset(e.target.value)} aria-label="Dataset">{datasets.map(d => <option key={d}>{d}</option>)}</select>
         <select value={metric} onChange={e => setMetric(e.target.value)} aria-label="Metric">{METRICS.map(m => <option key={m}>{m}</option>)}</select>
+        <MetricHelp metric={metric} />
         <button disabled={picked.length !== 2} onClick={() => nav(`/diff?a=${picked[0]}&b=${picked[1]}`)}>Compare {picked.length}/2</button>
       </PageHead>
 

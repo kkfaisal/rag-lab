@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { fmt, get, type RunRow } from '../api'
 import { PageHead } from '../components/ui'
+import { MetricHelp, Term } from '../components/Glossary'
 
 interface DiffRow { question_id: string; category: string; question: string; a: number | null; b: number | null; status: string }
 interface PairedTest { n: number; mean_a: number | null; mean_b: number | null; delta: number | null; ci95: [number, number] | null; p_value: number | null
@@ -15,13 +16,13 @@ function Verdict({ t, metric }: { t: PairedTest; metric: string }) {
   return (
     <div className={`card verdict ${t.significant ? (t.delta > 0 ? 'better' : 'worse') : 'noise'}`} style={{ margin: '10px 0' }}>
       <div className="stats">
-        <div className="stat"><div className="v">{fmt(t.mean_a)}</div><div className="k">A · mean {metric}</div></div>
-        <div className="stat"><div className="v">{fmt(t.mean_b)}</div><div className="k">B · mean {metric}</div></div>
+        <div className="stat"><div className="v">{fmt(t.mean_a)}</div><div className="k">A · mean <Term k={metric} /></div></div>
+        <div className="stat"><div className="v">{fmt(t.mean_b)}</div><div className="k">B · mean <Term k={metric} /></div></div>
         <div className="stat"><div className="v">{sign(t.delta)}</div><div className="k">difference B − A</div></div>
-        <div className="stat"><div className="v">{t.ci95 ? `${sign(t.ci95[0])} … ${sign(t.ci95[1])}` : '–'}</div><div className="k">95% confidence interval</div></div>
-        <div className="stat"><div className="v">{t.b_better} / {t.a_better} / {t.ties}</div><div className="k">questions B better / A better / tied</div></div>
+        <div className="stat"><div className="v">{t.ci95 ? `${sign(t.ci95[0])} … ${sign(t.ci95[1])}` : '–'}</div><div className="k"><Term k="confidence interval">95% confidence interval</Term></div></div>
+        <div className="stat"><div className="v">{t.b_better} / {t.a_better} / {t.ties}</div><div className="k"><Term k="questions won">questions B better / A better / tied</Term></div></div>
       </div>
-      <p style={{ margin: '8px 0 0' }}><b>{t.verdict}.</b> <span className="small muted">The verdict comes from a paired permutation test over {t.n} questions. The interval (a bootstrap over questions) shows the likely size of the gap; with few questions it is too narrow, so trust the verdict.</span></p>
+      <p style={{ margin: '8px 0 0' }}><b>{t.verdict}.</b> <Term k="p-value">What is p?</Term> <span className="small muted">The verdict comes from a paired permutation test over {t.n} questions. The interval (a bootstrap over questions) shows the likely size of the gap; with few questions it is too narrow, so trust the verdict.</span></p>
     </div>)
 }
 
@@ -43,7 +44,7 @@ export default function Diff() {
   const pick = (k: 'a' | 'b', v: string) => (
     <select value={v} onChange={e => set(k, e.target.value)}>
       <option value="">run {k.toUpperCase()}…</option>
-      {runs.filter(r => k === 'a' || !runA || r.dataset === runA.dataset).map(r => <option key={r.run_id} value={r.run_id}>{r.description || r.name} · {String(r.created_at).replace('T', ' ').slice(5, 16)}</option>)}
+      {runs.filter(r => k === 'a' || !runA || r.dataset === runA.dataset).map(r => <option key={r.run_id} value={r.run_id}>{r.run_id}</option>)}
     </select>
   )
   const runA = runs.find(r => r.run_id === a)
@@ -55,6 +56,7 @@ export default function Diff() {
         {pick('a', a)} → {pick('b', b)}
         {data && <select value={data.metric} onChange={e => set('metric', e.target.value)}>
           {data.metrics.map(m => <option key={m}>{m}</option>)}</select>}
+        {data && <MetricHelp metric={data.metric} />}
       </div>
       {error && <p className="pill miss">{error}</p>}
       {data && data.snapshots[0] !== null && data.snapshots[0] !== data.snapshots[1] &&

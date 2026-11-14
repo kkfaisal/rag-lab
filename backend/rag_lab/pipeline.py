@@ -73,16 +73,26 @@ def _resolve_judge(cfg: dict, dataset: str, evaluator: str, questions: list[dict
         ev["judge"] = False
 
 
+def run_id(name: str, meta: dict | None = None, now: datetime | None = None) -> str:
+    """A readable run identifier: <pipeline>_<target>_<yyyy>_<mm>_<dd>_<weekday>_<hh>_<mm>,
+    e.g. hybrid-rerank-agent_local-store_2026_11_14_sat_18_47."""
+    meta = meta or {}
+    who = "_".join(workspace.slug(x) for x in (meta.get("pipeline_name"), meta.get("target_name")) if x) or workspace.slug(name)
+    now = now or datetime.now()
+    day = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][now.weekday()]      # not %a: that depends on the locale
+    return f"{who}_{now:%Y_%m_%d}_{day}_{now:%H_%M}"
+
+
 class _Run:
     """Bookkeeping shared by both run kinds: the run folder, progress files, cached stages."""
 
     def __init__(self, kind: str, cfg: dict, stages: list[str], meta: dict | None, on_start, **fields):
         self.kind, self.cfg, self.started = kind, cfg, time.time()
-        self.id = base = f"{datetime.now():%Y%m%d-%H%M%S}-{cfg['name']}"
+        self.id = base = run_id(cfg["name"], meta)
         n = 1
-        while (paths.RUNS / self.id).exists():       # two runs of the same config within one second
+        while (paths.RUNS / self.id).exists():       # two runs of the same pipeline within one minute
             n += 1
-            self.id = f"{base}-{n}"
+            self.id = f"{base}_{n}"
         self.dir = paths.RUNS / self.id
         self.dir.mkdir(parents=True)
         (self.dir / "config.json").write_text(json.dumps(cfg, indent=2))

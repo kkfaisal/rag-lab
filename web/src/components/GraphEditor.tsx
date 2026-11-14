@@ -5,7 +5,7 @@ import {
   type Connection, type Edge, type Node, type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type Target } from '../api'
+import { send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type ImplInfo, type Target } from '../api'
 import CodeEditor from './CodeEditor'
 import ParamForm from './ParamForm'
 
@@ -24,14 +24,21 @@ const HELP: Record<string, string> = {
   rerank: 'Re-score the candidates', generate: 'Answer with Claude: single pass (llm) or agentic (agent)', benchmark: 'Score against the dataset\'s questions',
 }
 
-type RFData = { node: GraphNode; first: boolean; last: boolean; title: string; summary: string }
+// A node's part in the pipeline's latest run (see GraphPage): shown as a badge and a coloured border.
+export interface NodeStatus { state: 'queued' | 'waiting' | 'running' | 'done' | 'cached' | 'failed' | 'cancelled'; note?: string }
+const STATE_LABEL: Record<NodeStatus['state'], string> = {
+  queued: 'queued', waiting: 'waiting', running: 'running…', done: '✓ done', cached: '✓ cached', failed: '✕ failed', cancelled: 'cancelled' }
+
+type RFData = { node: GraphNode; first: boolean; last: boolean; title: string; summary: string; status?: NodeStatus }
 
 function StageNode({ data, selected }: NodeProps<Node<RFData>>) {
   const n = data.node
   return (
-    <div className={`rf-node stage-${n.stage} ${selected ? 'selected' : ''}`}>
+    <div className={`rf-node stage-${n.stage} ${selected ? 'selected' : ''} ${data.status ? `run-${data.status.state}` : ''}`}>
       {!data.first && <Handle type="target" position={Position.Left} />}
-      <div className="rf-head">{n.stage}</div>
+      <div className="rf-head">{n.stage}{data.status && <span className={`rf-state ${data.status.state}`}
+        title={data.status.state === 'cached' ? 'Reused from an earlier run with the same settings and code' : undefined}>
+        {STATE_LABEL[data.status.state]}{data.status.note && data.status.state === 'done' ? ` · ${data.status.note}` : ''}</span>}</div>
       <div className="rf-body">
         <div className="rf-impl">{data.title}</div>
         <div className="rf-summary">{data.summary || ' '}</div>
@@ -50,11 +57,12 @@ interface Props {
   targets: Target[]
   onChange: (g: Graph) => void
   extra?: (n: GraphNode, g: Graph) => ReactNode   // extra controls in the settings panel (previews)
+  status?: Record<string, NodeStatus>              // per node: its part in the latest run
 }
 
 // A node canvas (React Flow) plus a settings panel for the selected node.
 // The same component edits ingestion and retrieval pipelines.
-export default function GraphEditor({ kind, graph, catalog, datasets, targets, onChange, extra }: Props) {
+export default function GraphEditor({ kind, graph, catalog, datasets, targets, onChange, extra, status }: Props) {
   const stages = catalog.kinds[kind]
   const describe = useCallback((n: GraphNode): { title: string; summary: string } => {
     if (n.stage === 'source') return { title: String(n.params.dataset || 'Choose a dataset'), summary: `subset ${n.params.subset ?? 'all'} · snapshot ${n.params.snapshot ?? 'latest'}` }
@@ -106,7 +114,7 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
     setSelectedId(null)
   }
 
-  const shown = useMemo(() => nodes.map(n => ({ ...n, data: { ...n.data, ...describe(n.data.node) } })), [nodes, describe])
+  const shown = useMemo(() => nodes.map(n => ({ ...n, data: { ...n.data, ...describe(n.data.node), status: status?.[n.id] } })), [nodes, describe, status])
   const sel = nodes.find(n => n.id === selectedId)?.data.node
   const info = sel && catalog.stages[sel.stage]?.find(i => i.impl === sel.impl)
   const ds = sel?.stage === 'source' ? datasets.find(d => d.name === sel.params.dataset) : undefined
@@ -201,22 +209,41 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
                 {catalog.has_api_key ? '' : ' No ANTHROPIC_API_KEY is set, so LLM answers and judging are off.'}</span></div>
             </div>)}
 
-          {info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} scriptKind={sel.stage} />}
+          {info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} scriptKind={sel.stage}
+            versionKey={graph.id ? `${kind}/${graph.id}/${sel.id}` : undefined} />}
 
-          {info?.source && sel.impl !== 'python' && (
-            <div style={{ marginTop: 10 }}>
-              <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
-                <span className="small"><b>Python</b> <span className="faint">built-in · {info.source_file}</span></span>
-                {info.scriptable && (
-                  <button className="sm" title="Replace this node with an editable script that does the same thing"
-                    onClick={() => send<Record<string, unknown>>('POST', '/api/script-equivalent', { stage: sel.stage, impl: sel.impl, params: sel.params })
-                      .then(params => update(sel.id, { impl: 'python', params }))}>Edit as Python script</button>)}
-              </div>
-              <CodeEditor key={sel.stage + sel.impl} value={info.source} readOnly height="240px" title={`Built-in ${sel.stage} · ${info.source_file}`} />
-            </div>)}
+          {info?.source && sel.impl !== 'python' && <BuiltinCode key={sel.id + sel.impl} node={sel} info={info}
+            onConvert={params => update(sel.id, { impl: 'python', params })} />}
           {extra?.(sel, { ...graph, nodes: nodes.map(n => n.data.node), edges })}
         </>}
       </div>
     </div>
   )
+}
+
+// The code a built-in node runs. Where an equivalent script exists it is shown with this node's
+// current settings filled in, and editing it in the full-window editor turns the node into a
+// Python node. Otherwise the implementation's own function is shown, with the whole file below.
+function BuiltinCode({ node, info, onConvert }: { node: GraphNode; info: ImplInfo; onConvert: (params: Record<string, unknown>) => void }) {
+  const [eq, setEq] = useState<Record<string, unknown> | null>(null)
+  const paramsKey = JSON.stringify(node.params)
+  useEffect(() => {
+    if (!info.scriptable) return
+    const t = setTimeout(() => send<Record<string, unknown>>('POST', '/api/script-equivalent', { stage: node.stage, impl: node.impl, params: node.params })
+      .then(setEq).catch(() => setEq(null)), 250)
+    return () => clearTimeout(t)
+  }, [paramsKey, info.scriptable, node.stage, node.impl]) // eslint-disable-line react-hooks/exhaustive-deps
+  const code = eq ? String(eq.code ?? '') : info.fn_source ?? info.source ?? ''
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+        <span className="small"><b>Python</b> <span className="faint">{eq ? 'what this node runs, with its settings' : `built-in · ${info.source_file}`}</span></span>
+        {eq && <button className="sm" title="Replace this node with an editable script that does the same thing" onClick={() => onConvert(eq)}>Edit as Python script</button>}
+      </div>
+      <CodeEditor value={code} readOnly height="240px" kind={node.stage} title={`${node.stage} · ${node.impl}${eq ? '' : ` (${info.source_file})`}`}
+        onStudioSave={eq ? c => onConvert({ ...eq, code: c }) : undefined}
+        notice={eq ? 'Saving turns this node into a Python script node.' : undefined} />
+      {!eq && info.source && info.fn_source && <details style={{ marginTop: 6 }}><summary className="small muted">Whole file ({info.source_file})</summary>
+        <CodeEditor value={info.source} readOnly height="240px" title={info.source_file} /></details>}
+    </div>)
 }

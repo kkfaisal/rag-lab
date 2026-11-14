@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmt, get, heat, type RunRow } from '../api'
 import { Empty, PageHead } from '../components/ui'
+import { Term } from '../components/Glossary'
 
 // Columns shown by default; any other param is still filterable.
 const PARAM_COLS = ['target.name', 'retrieve.impl', 'retrieve.top_k', 'rerank.impl', 'generate.impl']
@@ -42,7 +43,7 @@ export default function Runs() {
 
   const Th = ({ col, label, num }: { col: string; label?: string; num?: boolean }) => (
     <th className={`sortable ${num ? 'num' : ''}`} onClick={() => setSort({ col, desc: sort.col === col ? !sort.desc : true })}>
-      {label ?? col}{sort.col === col ? (sort.desc ? ' ▾' : ' ▴') : ''}
+      <Term k={col === 'run_id' ? 'run' : col}>{label ?? col}</Term>{sort.col === col ? (sort.desc ? ' ▾' : ' ▴') : ''}
     </th>
   )
   const toggle = (id: string) => setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s.slice(-1), id])

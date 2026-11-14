@@ -18,11 +18,12 @@ from dotenv import load_dotenv
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from . import bench, data, jobs, paths, scripting, stats, tracking, workspace
+from . import bench, data, jobs, paths, scripting, stats, tracking, versions, workspace
 from .targets import TARGETS, Manifest, TargetError, open_target
 
 load_dotenv(paths.ROOT / ".env")
 data.migrate_layout()
+versions.record_all()          # scripts saved before versioning existed get their first version
 app = FastAPI(title="rag-lab")
 jobs.start()
 
@@ -232,6 +233,7 @@ def catalog():
         stages[stage] = [{"impl": name, "doc": (impl.fn.__doc__ or "").strip().split("\n\n")[0],
                           "schema": impl.config_cls.model_json_schema(), "defaults": impl.config_cls().model_dump(),
                           "source": inspect.getsource(sys.modules[impl.fn.__module__]),
+                          "fn_source": inspect.getsource(impl.fn),       # just this implementation
                           "source_file": f"backend/rag_lab/stages/{impl.fn.__module__.rsplit('.', 1)[-1]}.py",
                           "scriptable": name != "python" and "python" in impls
                                         and scripting.equivalent_script(stage, name, {}) is not None}
@@ -273,6 +275,23 @@ def _seed() -> None:
 
 
 # ----------------------------------------------------------------------------- code editor
+
+@app.get("/api/scripts/versions")
+def script_versions(key: str):
+    """Saved versions of one script, newest first (see versions.py for keys)."""
+    try:
+        return versions.listing(key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/scripts/versions/{version}")
+def script_version(key: str, version: int):
+    try:
+        return versions.get(key, version)
+    except (ValueError, KeyError):
+        raise HTTPException(404, f"no version {version} of {key}")
+
 
 @app.get("/api/scripts/info")
 def scripts_info():
@@ -340,7 +359,12 @@ def list_targets():
 
 @app.put("/api/targets")
 def save_target(body: dict = Body(...)):
-    return _guard(lambda: _target_view(workspace.save_target(body)))
+    def go():
+        t = workspace.save_target(body)
+        if isinstance((t.get("params") or {}).get("code"), str):
+            versions.record(f"targets/{t['id']}", t["params"]["code"], note="target script")
+        return _target_view(t)
+    return _guard(go)
 
 
 @app.delete("/api/targets/{target_id}")
@@ -378,7 +402,11 @@ def graph(kind: str, graph_id: str):
 
 @app.put("/api/graphs/{kind}")
 def save_graph(kind: str, body: dict = Body(...)):
-    return _guard(lambda: workspace.save_graph(kind, body))
+    def go():
+        g = workspace.save_graph(kind, body)
+        versions.record_graph(kind, g)          # every changed script gets a new version
+        return g
+    return _guard(go)
 
 
 @app.delete("/api/graphs/{kind}/{graph_id}")
@@ -593,9 +621,11 @@ def ingest_dataset(name: str, body: dict = Body(default={})):
     if source not in data.SOURCES:
         raise HTTPException(400, f"source must be one of {sorted(data.SOURCES)}")
     if source == "extract":
-        check = scripting.check("extract", (body.get("params") or {}).get("code", ""))
+        code = (body.get("params") or {}).get("code", "")
+        check = scripting.check("extract", code)
         if not check["ok"]:
             raise HTTPException(400, check["message"])
+        versions.record(f"datasets/{name}", code, note="extractor")
     title = {"enterprise_rag_bench": "Download + load", "extract": "Download", "folder": "Load into store"}[source]
     return jobs.submit("dataset", f"{title}: {name}",
                        {"dataset": name, "source": source, "params": body.get("params") or {}, "sync": bool(body.get("sync"))})

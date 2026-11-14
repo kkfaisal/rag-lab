@@ -1,5 +1,6 @@
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import { isActive, JobList, useJobs } from './components/Jobs'
+import { GlossaryPanel, openGlossary } from './components/Glossary'
 import { Icon, PageHead } from './components/ui'
 import Datasets from './pages/Datasets'
 import Diff from './pages/Diff'
@@ -38,6 +39,7 @@ export default function App() {
         {item('/heatmap', Icon.heat, 'By category')}
         <div className="nav-group">System</div>
         {item('/jobs', Icon.jobs, 'Jobs', active)}
+        <a className="nav-item" href="#" onClick={e => { e.preventDefault(); openGlossary() }} title="Every metric and term explained">{Icon.help}Glossary</a>
         <div className="sidebar-foot">Local playground · scripts run on this machine</div>
       </aside>
       <main className="main">
@@ -58,6 +60,7 @@ export default function App() {
           <Route path="/jobs" element={<><PageHead title="Jobs" sub="Dataset ingests, ingestion pipeline runs and benchmarks run one at a time in the background." /><JobList jobs={jobs} limit={50} /></>} />
         </Routes>
       </main>
+      <GlossaryPanel />
     </div>
   )
 }

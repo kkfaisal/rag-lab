@@ -384,7 +384,7 @@ function Extractor({ name, onRun }: { name: string; onRun: () => void }) {
   return (
     <div className="card">
       <p className="small muted" style={{ marginTop: 0 }}>This folder’s <code>extract.py</code>. Running it downloads into the folder again (files the script no longer writes stay on disk). It doesn’t touch the store: press <b>Reload into store</b> afterwards.</p>
-      <CodeEditor value={code} onChange={setCode} height="360px" kind="extract" title={`Extractor · ${name}`} />
+      <CodeEditor value={code} onChange={setCode} height="360px" kind="extract" title={`Extractor · ${name}`} versionKey={`datasets/${name}`} />
       <div className="row" style={{ marginTop: 10 }}><span className="grow" /><button className="primary" onClick={run}>Save and run (download)</button></div>
       <ErrorNote error={error} />
     </div>)

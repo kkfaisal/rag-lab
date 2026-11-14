@@ -7,4 +7,4 @@ Each implementation is `fn(cfg, ctx) -> dict` that writes its outputs into
 `ctx.out` and returns a small dict of stats (saved as meta.json).
 """
 
-from . import load, chunk, embed, retrieve, rerank, generate, evaluate  # noqa: F401
+from . import load, transform, chunk, embed, retrieve, rerank, generate, evaluate  # noqa: F401

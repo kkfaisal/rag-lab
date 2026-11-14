@@ -229,6 +229,39 @@ def test_bm25_only_target_and_script_nodes(tmp_path):
         pipeline.run_benchmark({**base, "retrieve": {"impl": "vector"}})
 
 
+def test_transform_node_rewrites_and_drops_documents(tmp_path):
+    _questions(tmp_path, [{"question_id": "q1", "question": "warehouse", "expected_doc_ids": ["b.txt"]}])
+    _dataset(tmp_path, "tr", {"a.txt": "Refunds\nrefunds within fourteen days", "b.txt": "Shipping\n<b>orders</b> ship from the leeds depot",
+                              "c.txt": "Draft\nDRAFT do not index"})
+    target = workspace.save_target({"name": "T tr", "type": "local", "params": {"vectors": False}})
+    code = ("def transform(doc):\n"
+            "    if 'DRAFT' in doc['text']:\n        return None\n"
+            "    return {**doc, 'text': doc['text'].replace('<b>', '').replace('</b>', '').replace('depot', 'warehouse')}\n")
+    cfg = {**_ingest_cfg("tr", target["id"], embed=False), "transform": {"impl": "python", "code": code}}
+    run_id = pipeline.run_ingest(cfg)
+    stats = {s["stage"]: s["stats"] for s in json.loads((paths.RUNS / run_id / "stages.json").read_text())}
+    assert (stats["transform"]["docs_in"], stats["transform"]["dropped"], stats["transform"]["changed"]) == (3, 1, 1)
+    assert stats["write"]["docs_written"] == 2                                 # the dropped document never reaches the target
+    t = open_target(target)
+    hits = t.search_text("warehouse", 5)
+    t.close()
+    assert [h["doc_id"] for h in hits] == ["b.txt"] and "<b>" not in hits[0]["text"]
+
+    # Changing the transform changes the documents' content hashes, so an append rewrites them.
+    cfg["transform"]["code"] = code.replace("'warehouse'", "'warehouse building'")
+    assert _last_write(pipeline.run_ingest(cfg))["docs_written"] == 1
+
+
+def test_clean_transform_script_equivalent_matches():
+    from rag_lab.stages import transform
+    params = {"drop_lines_matching": "^Sent from", "min_chars": 3, "max_chars": 40}
+    fn = scripting.load_functions(scripting.equivalent_script("transform", "clean", params)["code"], "transform")["transform"]
+    builtin = transform.make_cleaner(transform.CleanConfig(**params))
+    for text in ["<p>Hi &amp;  there</p>\nSent from phone\n\n\n\nbye", "x", "<script>var a</script>long " * 10]:
+        doc = {"doc_id": "a", "source": "s", "title": "", "text": text, "metadata": {}}
+        assert fn(dict(doc)) == builtin(dict(doc))
+
+
 # ---- canvas graphs
 
 def test_graphs_compile_to_configs():

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import duckdb
 
-from .. import paths
+from .. import db, paths
 
 
 @dataclass
@@ -31,7 +31,7 @@ class StageContext:
         per document / per chunk text, so a grown dataset only processes the delta."""
         d = paths.CACHE / "store" / stage
         d.mkdir(parents=True, exist_ok=True)
-        return duckdb.connect(str(d / f"{self.fingerprint}.duckdb"))
+        return db.connect(str(d / f"{self.fingerprint}.duckdb"))
 
     def log(self, msg: str) -> None:
         print(f"    {msg}", flush=True)
@@ -56,3 +56,10 @@ def unique_docs(chunks: list[dict]) -> list[str]:
             seen.add(c["doc_id"])
             out.append(c["doc_id"])
     return out
+
+
+def iter_parquet(path, batch_size: int, columns: list[str] | None = None):
+    """Read a parquet file batch by batch with flat memory. (pyarrow's default pre-buffering
+    keeps what it read, so memory would grow with the file.)"""
+    import pyarrow.parquet as pq
+    return pq.ParquetFile(path, pre_buffer=False).iter_batches(batch_size=batch_size, columns=columns)

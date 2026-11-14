@@ -23,7 +23,7 @@ from typing import Callable
 
 from pydantic import BaseModel
 
-INGEST_STAGES = ["load", "chunk", "embed"]                       # then the chunks are written to a target
+INGEST_STAGES = ["load", "transform", "chunk", "embed"]                       # then the chunks are written to a target
 BENCH_STAGES = ["retrieve", "rerank", "generate", "evaluate"]    # run against a target
 STAGES = INGEST_STAGES + BENCH_STAGES
 

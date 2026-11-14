@@ -26,7 +26,7 @@ import duckdb
 import httpx
 import pyarrow as pa
 
-from . import paths
+from . import db, paths
 from .datasets import get_adapter
 
 BENCH = "enterprise_rag_bench"
@@ -53,7 +53,7 @@ def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
         raise SystemExit("No data/corpus.duckdb yet. See the README quickstart (rag-lab data download / load).")
     for attempt in range(40):      # one writer process at a time: wait briefly if the file is busy
         try:
-            con = duckdb.connect(str(paths.CORPUS_DB), read_only=read_only)
+            con = db.connect(str(paths.CORPUS_DB), read_only=read_only)
             break
         except duckdb.IOException:
             if attempt == 39:

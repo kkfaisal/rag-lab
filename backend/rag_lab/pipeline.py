@@ -14,20 +14,21 @@ import time
 import traceback
 from datetime import datetime
 
-import pyarrow.parquet as pq
+import pyarrow as pa
 import numpy as np
 
-from . import bench, cache, data, paths, tracking, workspace
+from . import bench, cache, data, db, paths, tracking, workspace
 from .config import resolve
 from .datasets import ADAPTERS
 from .registry import BENCH_STAGES, INGEST_STAGES, get
 from .targets import Manifest, open_target
-from .stages.base import StageContext
+from .stages.base import StageContext, iter_parquet
+from .stages.transform import docs_file as transform_docs_file
 
 # Stage stats worth showing next to a node in the UI.
 STAT_KEYS = {"n_docs", "n_chunks", "docs_chunked", "docs_reused", "avg_chars", "max_chars", "n", "dim", "embedded", "reused",
              "mode", "docs_written", "docs_skipped", "docs_deleted", "chunks_written", "target_version",
-             "n_questions", "abstained", "refusals", "judged"}
+             "n_questions", "abstained", "refusals", "judged", "docs_in", "dropped", "changed", "chars_in", "chars_out", "passthrough"}
 
 # Files copied from stage cache dirs into the run folder (small, human-readable).
 ARTIFACTS = {
@@ -202,53 +203,66 @@ def _write_target(run: _Run, target_def: dict, mode: str, dataset: str, subset: 
     cfg = run.cfg
     embed_meta = {k: run.metas["embed"][k] for k in ("model", "query_prefix", "max_seq_length", "code") if k in run.metas["embed"]} or None
     settings = cache.stage_key("doc", {"chunk": cfg["chunk"], "embed": cfg["embed"]}, None, run.code["chunk"]["hash"])
-    docs = pq.read_table(run.dirs["load"] / "docs.parquet", columns=["doc_id", "content_hash"]).to_pylist()
-    wanted = {d["doc_id"]: cache.stage_key("doc", d["content_hash"], settings, "") for d in docs}
+    docs_file, chunks_file = transform_docs_file(run.dirs), run.dirs["chunk"] / "chunks.parquet"
 
     target, manifest = open_target(target_def), Manifest(paths.TARGETS / target_def["id"])
+    work = db.connect()                 # in-memory, capped, spills to disk: the diff never sits in Python
     try:
         if mode == "overwrite":
             target.clear()
             manifest.reset()
-            known = {}
-        else:
-            known = manifest.known()
-            if known and manifest.data["embed"] != embed_meta:
-                raise SystemExit(f"Target {target_def['name']!r} was written with a different embedder "
-                                 f"({manifest.data['embed']}). Use mode 'overwrite' to rebuild it, or a different target.")
-        todo = {doc_id for doc_id, h in wanted.items() if known.get(doc_id) != h}
-        changed = [d for d in todo if d in known]
-        if changed:
-            target.delete_docs(changed)
-        print(f"    {len(todo):,} documents to write ({len(changed):,} changed), {len(wanted) - len(todo):,} already up to date", flush=True)
-        if not todo and known:          # nothing to do: leave the target and its version untouched
-            return {"mode": mode, "docs_written": 0, "docs_skipped": len(wanted), "chunks_written": 0,
+        elif manifest.data["n_docs"] and manifest.data["embed"] != embed_meta:
+            raise SystemExit(f"Target {target_def['name']!r} was written with a different embedder "
+                             f"({manifest.data['embed']}). Use mode 'overwrite' to rebuild it, or a different target.")
+        # What each document should look like in the target: hash of its content + chunk/embed settings.
+        work.execute("CREATE TABLE wanted(doc_id VARCHAR, doc_hash VARCHAR)")
+        for b in iter_parquet(docs_file, 50_000, ["doc_id", "content_hash"]):
+            ids, hashes = b.column("doc_id").to_pylist(), b.column("content_hash").to_pylist()
+            work.register("w", pa.table({"doc_id": ids, "doc_hash": [cache.stage_key("doc", h, settings, "") for h in hashes]}))
+            work.execute("INSERT INTO wanted SELECT * FROM w")
+            work.unregister("w")
+        # todo = new documents + documents whose hash changed (those were written before: changed = true).
+        work.execute(f"ATTACH '{manifest.db_file()}' AS m (READ_ONLY)")
+        work.execute("""CREATE TABLE todo AS SELECT w.doc_id, w.doc_hash, k.doc_id IS NOT NULL AS changed
+                        FROM wanted w LEFT JOIN m.docs k USING (doc_id) WHERE k.doc_hash IS DISTINCT FROM w.doc_hash""")
+        work.execute("DETACH m")
+        n_wanted, n_todo, n_changed = work.execute(
+            "SELECT (SELECT count(*) FROM wanted), count(*), count(*) FILTER (WHERE changed) FROM todo").fetchall()[0]
+        print(f"    {n_todo:,} documents to write ({n_changed:,} changed), {n_wanted - n_todo:,} already up to date", flush=True)
+        if not n_todo and manifest.data["n_docs"]:     # nothing to do: leave the target and its version untouched
+            return {"mode": mode, "docs_written": 0, "docs_skipped": n_wanted, "chunks_written": 0,
                     "target_version": manifest.data["version"]}
 
-        chunks = pq.read_table(run.dirs["chunk"] / "chunks.parquet", columns=["chunk_id", "doc_id", "source", "title", "text"])
+        for b in work.sql("SELECT doc_id FROM todo WHERE changed").to_arrow_reader(10_000):
+            target.delete_docs(b.column("doc_id").to_pylist())       # their old chunks go first
+
         emb = np.load(run.dirs["embed"] / "embeddings.npy", mmap_mode="r") if run.metas["embed"].get("n") else None
-        per_doc, written, batch = {d: 0 for d in todo}, 0, []
-        for i, c in enumerate(chunks.to_pylist()):
-            if c["doc_id"] in todo:
-                batch.append({**c, "vector": emb[i].tolist() if emb is not None else None})
-                per_doc[c["doc_id"]] += 1
-            if len(batch) >= 2000:
-                target.add(batch)
-                written += len(batch)
-                batch = []
+        reader = work.sql(f"""SELECT c.file_row_number AS row, c.chunk_id, c.doc_id, c.source, c.title, c.text
+                              FROM read_parquet('{chunks_file}', file_row_number = true) c SEMI JOIN todo USING (doc_id)
+                           """).to_arrow_reader(2_000)    # no ORDER BY: sorting chunk text needs memory; vectors are looked up by row
+        written = 0
+        for b in reader:
+            rows = b.column("row").to_numpy()
+            vecs = emb[rows] if emb is not None else None
+            target.add([{**c, "vector": vecs[i].tolist() if vecs is not None else None}
+                        for i, c in enumerate(b.drop_columns(["row"]).to_pylist())])
+            written += b.num_rows
+            if written % 100_000 < b.num_rows:
                 print(f"    wrote {written:,} chunks", flush=True)
-        if batch:
-            target.add(batch)
-            written += len(batch)
+        del emb
         target.finish()
-        manifest.record([(d, wanted[d], n) for d, n in per_doc.items()])
+        # Remember what was written: per document its hash and chunk count.
+        work.execute(f"""CREATE TABLE written AS SELECT t.doc_id, t.doc_hash, count(c.doc_id)::INTEGER AS n_chunks
+                         FROM todo t LEFT JOIN read_parquet('{chunks_file}') c USING (doc_id) GROUP BY 1, 2""")
+        manifest.record_from(work, "written")
         version = manifest.commit({"mode": mode, "run_id": run.id, "pipeline": (run.info["meta"] or {}).get("pipeline_name"),
-                                   "docs_written": len(todo), "docs_skipped": len(wanted) - len(todo), "chunks_written": written},
+                                   "docs_written": n_todo, "docs_skipped": n_wanted - n_todo, "chunks_written": written},
                                   embed=embed_meta, dataset=dataset, subset=subset, snapshot=snapshot)
     finally:
+        work.close()
         target.close()
     run.info["target_version"] = version
-    return {"mode": mode, "docs_written": len(todo), "docs_skipped": len(wanted) - len(todo), "chunks_written": written,
+    return {"mode": mode, "docs_written": n_todo, "docs_skipped": n_wanted - n_todo, "chunks_written": written,
             "target_version": version}
 
 

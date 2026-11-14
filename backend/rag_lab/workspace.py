@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import paths
 
-KINDS = {"ingestion": ["source", "chunk", "embed", "target"],
+KINDS = {"ingestion": ["source", "transform", "chunk", "embed", "target"],
          "retrieval": ["target", "retrieve", "rerank", "generate", "benchmark"]}
 
 
@@ -136,8 +136,11 @@ def compile_ingest(pipeline: dict, node_id: str) -> tuple[dict, dict]:
         raise GraphError(f"{node_id!r} is not a target node of {pipeline['name']!r}")
     path = _path_to(pipeline, node_id)
     stages = [n["stage"] for n in path]
-    if stages not in (["source", "chunk", "embed", "target"], ["source", "chunk", "target"]):
-        raise GraphError(f"a target must be fed by source → chunk → (embed) → target; this path is {' → '.join(stages)}")
+    core = [s for s in stages if s not in ("transform", "embed")]
+    if core != ["source", "chunk", "target"] or stages.count("transform") > 1 or stages.count("embed") > 1 \
+            or ("transform" in stages and stages.index("transform") != 1) or ("embed" in stages and stages[-2] != "embed"):
+        raise GraphError("a target must be fed by source → (transform) → chunk → (embed) → target; "
+                         f"this path is {' → '.join(stages)}")
     by = {n["stage"]: n for n in path}
     src, tp = by["source"].get("params") or {}, node.get("params") or {}
     if not src.get("dataset"):
@@ -149,6 +152,7 @@ def compile_ingest(pipeline: dict, node_id: str) -> tuple[dict, dict]:
            "description": f"{pipeline['name']} → {target['name']}",
            "data": {"dataset": src["dataset"], "subset": src.get("subset") or "all", "snapshot": src.get("snapshot") or "latest"},
            "load": {"impl": "corpus", "sources": src.get("sources") or None},
+           "transform": _block(by["transform"]) if "transform" in by else {"impl": "none"},
            "chunk": _block(by["chunk"]),
            "embed": _block(by["embed"]) if "embed" in by else {"impl": "none"},
            "target": {"id": target["id"], "mode": tp.get("mode") or "append"}}

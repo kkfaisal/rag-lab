@@ -10,7 +10,7 @@ against a question set.
 |---|---|
 | **Dataset** | Source documents **plus benchmark questions** (both required). Comes from a built-in data source or a Python script. Versioned: every ingest that changes something is a snapshot. |
 | **Target** | A named, persistent store that chunks are written to and searched in. Built-in: local (vectors + BM25), PostgreSQL + pgvector, any SQL database, Qdrant, OpenSearch, Elasticsearch. Or a Python script for your own store. |
-| **Ingestion pipeline** | `source → chunk → embed → target`. Running it writes to the target, **appending** or **overwriting** as the target node says. Can branch to fill several targets. |
+| **Ingestion pipeline** | `source → (transform) → chunk → (embed) → target`. Running it writes to the target, **appending** or **overwriting** as the target node says. Can branch to fill several targets. |
 | **Retrieval pipeline** | `target → retrieve → rerank → generate → benchmark`. Running it answers the dataset's questions from the target and scores the result. |
 
 Every node is either a built-in with a settings form or a **Python script you edit in the browser**.
@@ -178,11 +178,28 @@ environment (`.env`) when connecting, e.g. `postgresql://raglab:${POSTGRES_PASSW
 Qdrant, OpenSearch and Elasticsearch settings take the *names* of environment variables. Every target
 form has a **Test connection** button.
 
+## Transform node
+
+An optional node between source and chunk that changes documents before chunking:
+
+- **clean** (built-in): strip HTML, drop lines matching a regex (boilerplate footers, signatures),
+  normalise whitespace, drop documents shorter than `min_chars`, cut ones longer than `max_chars`.
+- **python**: `transform(doc)` gets `doc_id`, `source`, `title`, `text` and `metadata` (a dict) and
+  returns the changed document, or `None` to drop it. `doc_id` must stay the same, since questions refer to it.
+
+Each document's content hash is recomputed from the transformed content, so the chunk and embed caches
+and append mode follow the transform: change it, and only documents whose output changed are
+rechunked, re-embedded and rewritten. The node panel previews the transform on a random document
+(before and after), and *Edit as Python script* turns `clean` into the equivalent script.
+
 ## Script nodes
 
 ```python
-def extract(path):                       # data source: path is the upload folder (or one you name)
-    yield {"doc_id": "a", "text": "...", "title": "...", "source": "..."}
+def download(folder):                    # dataset extractor: write documents + questions.jsonl into folder
+    ...
+
+def transform(doc):                      # transform node: return the changed doc, or None to drop it
+    return {**doc, "text": doc["text"].strip()}
 
 def chunk(doc):                          # chunk node: doc has doc_id, source, title, text, body
     return [p for p in doc["body"].split("\n\n") if p.strip()]
@@ -217,6 +234,47 @@ button that opens a full-window editor:
   `claude-sonnet-5-5`, or set `RAG_LAB_ASSIST_MODEL`. Each suggestion's cost is shown.
 
 `⌘S` saves, `Esc` closes.
+
+## How data moves, and large datasets
+
+Nodes don't pass data in memory. Each step writes its output to files in the cache, and the next
+step reads them:
+
+| Step | Reads | Writes |
+|---|---|---|
+| load | the document store | `docs.parquet` (the snapshot's documents) |
+| transform | `docs.parquet` | `docs.parquet` (transformed; skipped when there's no transform node) |
+| chunk | documents | `chunks.parquet` |
+| embed | `chunks.parquet` | `embeddings.npy` (one vector per chunk, same row order) |
+| write | `chunks.parquet` + `embeddings.npy` | the target, 2,000 chunks at a time |
+
+Every step reads its input in batches and writes as it goes, so memory doesn't grow with the dataset.
+Joins, deduplication and the append/overwrite diff run in DuckDB, which is capped at
+`RAG_LAB_DUCKDB_MEMORY` per connection (default `1GB`) and spills to `cache/duckdb-tmp/` beyond that.
+Raise the cap for speed if you have the RAM.
+
+Measured on synthetic text with a fast toy embedder (32-dim, no model) and a local target, at the
+default 1 GB cap. The 5 GB dataset was 800k documents, which made 5.8M chunks:
+
+| Step | Peak memory (process) | Notes |
+|---|---|---|
+| load the dataset folder into the store | 3.7 GB | |
+| chunk | 3.3 GB | flat across the run |
+| embed | 3.1 GB | flat across the run |
+| write to target | 4.2 GB | 6.1 GB including the local target's BM25 index build |
+
+The previous version used 14.4 GB on just 1.25 GB of text, and would not have fit 5 GB on most machines.
+The one part that still grows with size is the local target's BM25 index, which DuckDB builds mostly
+in memory: about 2 GB for 6M chunks. It has its own cap, `RAG_LAB_FTS_MEMORY` (default `4GB`).
+
+Memory is no longer the limit at this size; time and disk are:
+
+- **Embedding time.** `bge-small` on a laptop embeds a few hundred chunks per second, so 5M chunks is
+  hours. Use a GPU (`device` on the embed node) or an embedding API through an embed script.
+- **Disk.** Text is stored in the dataset folder, the document store, `docs.parquet`, the chunk cache
+  and `chunks.parquet`: plan for 3–4× the raw size.
+- **The local target** searches vectors exactly in memory and rebuilds its BM25 index after every
+  write. Past about a million chunks, use pgvector, Qdrant, OpenSearch or Elasticsearch.
 
 ## Caching
 
@@ -268,7 +326,8 @@ backend/rag_lab/
   data.py         dataset folders, extractors, versioned document store, snapshots, subsets, metrics
   targets/        target types (local, pgvector, sql, qdrant, opensearch, elasticsearch, script) + manifest
   services.py     the docker-compose database services: URLs and reachability
-  stages/         load, chunk, embed, retrieve, rerank, generate, evaluate
+  stages/         load, transform, chunk, embed, retrieve, rerank, generate, evaluate
+  db.py           every DuckDB connection: memory cap, spill directory
   registry.py     stage implementation registry
   scripting.py    loading user scripts, their templates and contracts, built-in → script equivalents
   assist.py       AI help in the code editor (Claude proposes a rewritten script)

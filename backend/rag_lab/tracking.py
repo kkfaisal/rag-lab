@@ -11,7 +11,7 @@ from pathlib import Path
 
 import duckdb
 
-from . import paths
+from . import db, paths
 from .config import flatten
 
 
@@ -43,7 +43,7 @@ def _connect(read_only=False, retries=20):
     paths.RUNS.mkdir(parents=True, exist_ok=True)
     for i in range(retries):
         try:
-            con = duckdb.connect(str(paths.RUNS_INDEX), read_only=read_only)
+            con = db.connect(str(paths.RUNS_INDEX), read_only=read_only)
             if not read_only:
                 con.execute(SCHEMA)
             return con

@@ -11,15 +11,15 @@ import ParamForm from './ParamForm'
 
 // Which stage may feed which.
 const ALLOWED: Record<string, string[]> = {
-  source: ['chunk'], chunk: ['embed', 'target'], embed: ['target'],
+  source: ['transform', 'chunk'], transform: ['chunk'], chunk: ['embed', 'target'], embed: ['target'],
   target: ['retrieve'], retrieve: ['rerank', 'generate', 'benchmark'], rerank: ['generate', 'benchmark'], generate: ['benchmark'],
 }
 const DEFAULT_IMPL: Record<string, string> = {
-  source: 'dataset', chunk: 'fixed', embed: 'sentence_transformers', target: 'target',
+  source: 'dataset', transform: 'clean', chunk: 'fixed', embed: 'sentence_transformers', target: 'target',
   retrieve: 'hybrid', rerank: 'cross_encoder', generate: 'llm', benchmark: 'benchmark',
 }
 const HELP: Record<string, string> = {
-  source: 'Documents of a dataset', chunk: 'Split documents into pieces', embed: 'Turn chunks into vectors',
+  source: 'Documents of a dataset', transform: 'Clean, rewrite or filter documents (optional)', chunk: 'Split documents into pieces', embed: 'Turn chunks into vectors',
   target: 'The store chunks are written to / searched in', retrieve: 'Find candidate chunks for a question',
   rerank: 'Re-score the candidates', generate: 'Answer with an LLM', benchmark: 'Score against the dataset\'s questions',
 }
@@ -87,8 +87,10 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
 
   const addNode = (stage: string) => {
     const id = `${stage}-${Math.random().toString(36).slice(2, 7)}`
+    // Column by stage; below everything already in that column's neighbourhood, so a new node never covers another.
     const x = stages.indexOf(stage) * 290
-    const y = 60 + nodes.filter(n => n.data.node.stage === stage).length * 150
+    const near = nodes.filter(n => Math.abs(n.position.x - x) < 260)
+    const y = near.length ? Math.max(...near.map(n => n.position.y)) + 150 : 60
     const params: Record<string, unknown> =
       stage === 'source' ? { dataset: datasets[0]?.name ?? '', subset: 'all', snapshot: 'latest' }
       : stage === 'target' ? { target_id: targets[0]?.id ?? '', ...(kind === 'ingestion' ? { mode: 'append' } : {}) }

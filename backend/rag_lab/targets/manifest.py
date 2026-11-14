@@ -12,7 +12,7 @@ import json
 import time
 from pathlib import Path
 
-import duckdb
+from .. import db
 
 
 class Manifest:
@@ -23,9 +23,14 @@ class Manifest:
             "version": 0, "embed": None, "dataset": None, "subset": None, "snapshot": None,
             "n_docs": 0, "n_chunks": 0, "history": []}
 
+    def db_file(self) -> Path:
+        self._db().close()          # make sure the file and table exist
+        return self.dir / "docs.duckdb"
+
     def _db(self):
-        con = duckdb.connect(str(self.dir / "docs.duckdb"))
-        con.execute("CREATE TABLE IF NOT EXISTS docs(doc_id VARCHAR PRIMARY KEY, doc_hash VARCHAR, n_chunks INTEGER)")
+        con = db.connect(str(self.dir / "docs.duckdb"))
+        # No PRIMARY KEY (DuckDB keeps key indexes in memory); writes replace rows with delete + insert.
+        con.execute("CREATE TABLE IF NOT EXISTS docs(doc_id VARCHAR, doc_hash VARCHAR, n_chunks INTEGER)")
         return con
 
     def known(self) -> dict[str, str]:
@@ -44,9 +49,21 @@ class Manifest:
         """rows = (doc_id, doc_hash, n_chunks) for every document just written."""
         if not rows:
             return
+        import pyarrow as pa
         con = self._db()
-        con.executemany("INSERT OR REPLACE INTO docs VALUES (?, ?, ?)", rows)
+        con.register("rows", pa.table({"doc_id": [r[0] for r in rows], "doc_hash": [r[1] for r in rows],
+                                       "n_chunks": pa.array([r[2] for r in rows], pa.int32())}))
+        con.execute("DELETE FROM docs WHERE doc_id IN (SELECT doc_id FROM rows)")
+        con.execute("INSERT INTO docs SELECT * FROM rows")
         con.close()
+
+    def record_from(self, con, table: str) -> None:
+        """Like record(), from a table (doc_id, doc_hash, n_chunks) in another DuckDB connection,
+        without loading it into Python."""
+        con.execute(f"ATTACH '{self.db_file()}' AS m")
+        con.execute(f"DELETE FROM m.docs WHERE doc_id IN (SELECT doc_id FROM {table})")
+        con.execute(f"INSERT INTO m.docs SELECT doc_id, doc_hash, n_chunks FROM {table}")
+        con.execute("DETACH m")
 
     def commit(self, entry: dict, **fields) -> int:
         """Bump the version after a write and add a history entry."""

@@ -23,6 +23,21 @@ CHUNK_TEMPLATE = '''def chunk(doc):
     return [doc["title"] + "\\n" + c.strip() for c in chunks]
 '''
 
+TRANSFORM_TEMPLATE = '''import re
+
+
+def transform(doc):
+    """Change one document before it is chunked. Return the document, or None to drop it.
+
+    doc keys: doc_id (keep it unchanged), source, title, text, metadata (a dict).
+    """
+    if len(doc["text"]) < 200:                     # e.g. drop near-empty documents
+        return None
+    text = re.sub(r"<[^>]+>", " ", doc["text"])     # strip HTML tags
+    text = re.sub(r"[ \\t]+", " ", text).strip()
+    return {**doc, "text": text}
+'''
+
 RETRIEVE_TEMPLATE = '''def retrieve(question, search, top_k):
     """Return ranked chunks for one question: a list of {"chunk_id", "doc_id", "score"}.
 
@@ -161,6 +176,21 @@ def equivalent_script(stage: str, impl: str, params: dict) -> dict | None:
                     "    else:\n        pieces = split_fixed(doc[\"body\"], SIZE, OVERLAP)\n"
                     f"    return [{title} for c in pieces]\n")
         return {"code": code, "prepend_title": False}
+    if stage == "transform" and impl == "clean":
+        from .stages import transform
+        head = (f"STRIP_HTML = {p.get('strip_html', True)}\nNORMALIZE_WHITESPACE = {p.get('normalize_whitespace', True)}\n"
+                f"DROP_LINES_MATCHING = {p.get('drop_lines_matching')!r}\nMIN_CHARS = {p.get('min_chars', 0)}\n"
+                f"MAX_CHARS = {p.get('max_chars')!r}\n")
+        src = inspect.getsource(transform.make_cleaner)
+        body = src[src.index("    def clean"):src.index("    return clean")]                 # the inner function
+        body = "\n".join(line[4:] for line in body.split("\n"))
+        for old, new in [("cfg.strip_html", "STRIP_HTML"), ("cfg.normalize_whitespace", "NORMALIZE_WHITESPACE"),
+                         ("cfg.min_chars", "MIN_CHARS"), ("cfg.max_chars", "MAX_CHARS"), ("drop", "DROP"),
+                         ("def clean(doc: dict) -> dict | None:", "def transform(doc):")]:
+            body = body.replace(old, new)
+        code = (f"import html\nimport re\n\n{head}DROP = re.compile(DROP_LINES_MATCHING) if DROP_LINES_MATCHING else None\n"
+                f"TAG = re.compile({transform.TAG.pattern!r}, re.S | re.I)\n\n\n{body.rstrip()}\n")
+        return {"code": code}
     if stage == "retrieve" and impl in ("bm25", "vector", "hybrid"):
         from .stages import retrieve
         k = p.get("top_k", 20)
@@ -261,6 +291,7 @@ def load_functions(code: str, required: str, optional: tuple[str, ...] = (), ext
 
 # Every kind of script: its starting template and the functions rag-lab calls.
 CONTRACTS = {
+    "transform": {"template": TRANSFORM_TEMPLATE, "required": ["transform"], "optional": []},
     "chunk": {"template": CHUNK_TEMPLATE, "required": ["chunk"], "optional": []},
     "embed": {"template": EMBED_TEMPLATE, "required": ["embed"], "optional": ["embed_query"]},
     "retrieve": {"template": RETRIEVE_TEMPLATE, "required": ["retrieve"], "optional": []},

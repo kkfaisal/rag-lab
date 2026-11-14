@@ -1,11 +1,14 @@
 """Local target: one DuckDB file on disk. Vector search is exact (numpy over all
 vectors), keyword search is BM25 via DuckDB's full-text extension. Zero setup."""
 
+import os
+
 import duckdb
 import numpy as np
 import pyarrow as pa
 from pydantic import BaseModel
 
+from .. import db
 from .base import Target, TargetError, register_target
 
 
@@ -35,7 +38,7 @@ class LocalTarget(Target):
             self._read_only = read_only
             if read_only and not self.file.exists():
                 raise TargetError("This target is empty. Run an ingestion pipeline that writes to it.")
-            self._con = duckdb.connect(str(self.file), read_only=read_only)
+            self._con = db.connect(str(self.file), read_only=read_only)
             if not read_only:
                 self._con.execute("""CREATE TABLE IF NOT EXISTS chunks(chunk_id VARCHAR, doc_id VARCHAR, source VARCHAR,
                                      title VARCHAR, text VARCHAR, vec FLOAT[])""")
@@ -66,8 +69,16 @@ class LocalTarget(Target):
         if self.cfg.bm25:       # DuckDB's FTS index is not incremental: rebuild it after every write
             con = self.con()
             con.execute("INSTALL fts; LOAD fts;")
-            con.execute(f"PRAGMA create_fts_index('chunks', 'chunk_id', 'text', stemmer='{self.cfg.stemmer}', "
-                        f"stopwords='{self.cfg.stopwords}', overwrite=1)")
+            # Building the BM25 index is mostly in memory and grows with the chunk count (~2 GB for 6M
+            # chunks), so it gets its own, higher cap than other DuckDB work.
+            limit = os.environ.get("RAG_LAB_FTS_MEMORY", "4GB")
+            con.execute(f"SET memory_limit = '{limit}'")
+            try:
+                con.execute(f"PRAGMA create_fts_index('chunks', 'chunk_id', 'text', stemmer='{self.cfg.stemmer}', "
+                            f"stopwords='{self.cfg.stopwords}', overwrite=1)")
+            except duckdb.OutOfMemoryException as e:
+                raise TargetError(f"Not enough memory to build the BM25 index (RAG_LAB_FTS_MEMORY={limit}). Raise it, "
+                                  "or use a server-backed target (OpenSearch, Elasticsearch, pgvector) for this many chunks.") from e
         self.close()            # checkpoint to disk so other processes (and the vector cache) see the new state
 
     def search_text(self, query, k):

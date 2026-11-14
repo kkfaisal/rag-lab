@@ -124,7 +124,8 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
         <ErrorNote error={error} />
 
         <GraphEditor key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets} targets={targets}
-          onChange={setGraph} extra={(n, g) => kind === 'ingestion' && n.stage === 'chunk' ? <ChunkPreview node={n} graph={g} /> : null} />
+          onChange={setGraph} extra={(n, g) => kind !== 'ingestion' ? null : n.stage === 'chunk' ? <ChunkPreview node={n} graph={g} />
+            : n.stage === 'transform' ? <TransformPreview node={n} graph={g} /> : null} />
 
         {kind === 'retrieval' && <TryQuery graph={graph} targets={targets.filter(tg => tg.version)} defaultTarget={ownTarget} />}
         <div className="section-title">Runs of this page <span className="muted">· <Link to="/jobs">all jobs</Link></span></div>
@@ -149,6 +150,30 @@ function ChunkPreview({ node, graph }: { node: GraphNode; graph: Graph }) {
       {out && <>
         <p className="small muted">{out.doc.source} · “{out.doc.title.slice(0, 60)}” · {out.doc.chars.toLocaleString()} chars → <b>{out.chunks.length} chunks</b></p>
         {out.chunks.slice(0, 12).map((c, i) => <details key={i}><summary className="small">chunk {i} · {c.length} chars</summary><pre>{c}</pre></details>)}
+      </>}
+    </div>
+  )
+}
+
+interface PreviewDoc { doc_id: string; source: string; title: string; text: string; metadata: Record<string, unknown> }
+
+// Run the transform node on one document and show it before and after.
+function TransformPreview({ node, graph }: { node: GraphNode; graph: Graph }) {
+  const [out, setOut] = useState<{ before: PreviewDoc; after: PreviewDoc | null }>()
+  const [err, setErr] = useState<string>()
+  const dataset = useMemo(() => String(graph.nodes.find(n => n.stage === 'source')?.params.dataset ?? ''), [graph])
+  return (
+    <div style={{ marginTop: 12 }}>
+      <button className="sm" disabled={!dataset} onClick={() => {
+        setErr(undefined)
+        send<typeof out>('POST', '/api/preview/transform', { impl: node.impl, params: node.params, dataset }).then(setOut).catch(e => { setOut(undefined); setErr(errText(e)) })
+      }}>Preview on a random document</button>
+      <ErrorNote error={err} />
+      {out && <>
+        <p className="small muted">{out.before.doc_id} · {out.before.text.length.toLocaleString()} chars →{' '}
+          {out.after === null ? <b className="bad-text">dropped</b> : <b>{out.after.text.length.toLocaleString()} chars{out.after.text === out.before.text && out.after.title === out.before.title ? ' (unchanged)' : ''}</b>}</p>
+        <details><summary className="small">before</summary><pre>{out.before.text.slice(0, 4000)}</pre></details>
+        {out.after && <details open><summary className="small">after{out.after.title !== out.before.title ? ` · title “${out.after.title}”` : ''}</summary><pre>{out.after.text.slice(0, 4000)}</pre></details>}
       </>}
     </div>
   )

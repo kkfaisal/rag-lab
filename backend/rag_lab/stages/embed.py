@@ -1,6 +1,8 @@
 """embed: turn every chunk into a vector.
 
 Outputs embeddings.npy (float32, L2-normalised, same row order as chunks.parquet).
+Texts are embedded in batches and the output is written through a memory map, so
+memory use doesn't grow with the dataset.
 Vectors are cached per chunk-text hash in a store shared by every run using the
 same embedding settings, so only new or changed chunk texts are ever embedded.
 The query-side settings (model, query_prefix) go in meta.json so retrieval can
@@ -16,7 +18,7 @@ from pydantic import BaseModel
 
 from ..registry import NoConfig, register
 from ..scripting import EMBED_TEMPLATE, ScriptError, load_functions
-from .base import StageContext
+from .base import StageContext, iter_parquet
 
 SAVE_EVERY = 10_000
 # Bump when a code change alters the vectors themselves (e.g. normalisation), so the
@@ -52,25 +54,56 @@ def encode(model_name: str, texts: list[str], max_seq_length: int = 512, device=
 
 def _embed_with_store(ctx: StageContext, dim: int, encode_fn, label: str, meta: dict) -> dict:
     """Embed only chunk texts this embedder hasn't seen (keyed by text hash), in
-    batches that are saved as they finish — an interrupted job keeps its progress."""
-    chunks = pq.read_table(ctx.dirs["chunk"] / "chunks.parquet", columns=["text_hash", "text"])
+    batches that are saved as they finish — an interrupted job keeps its progress.
+    Memory stays flat: chunks are read SAVE_EVERY at a time, and embeddings.npy is
+    filled through a memory map rather than built in RAM."""
+    chunks_file = ctx.dirs["chunk"] / "chunks.parquet"
+    n_chunks = pq.ParquetFile(chunks_file).metadata.num_rows
     store = ctx.store("embed")
-    store.execute(f"CREATE TABLE IF NOT EXISTS vecs(text_hash VARCHAR PRIMARY KEY, vec FLOAT[{dim}])")
-    store.register("chunks", chunks.append_column("ord", pa.array(range(chunks.num_rows))))
-    todo = store.execute("SELECT text_hash, any_value(text) FROM chunks ANTI JOIN vecs USING (text_hash) GROUP BY 1").fetchall()
-    ctx.log(f"{chunks.num_rows:,} chunks: {len(todo):,} to embed with {label}, {chunks.num_rows - len(todo):,} already in store")
-    for start in range(0, len(todo), SAVE_EVERY):
-        part = todo[start:start + SAVE_EVERY]
-        vecs = encode_fn([t for _, t in part])
-        store.register("new_vecs", pa.table({"text_hash": [h for h, _ in part],
+    # No PRIMARY KEY: DuckDB keeps key indexes in memory, so they grow with the data. Only hashes not
+    # yet in the store are inserted, each once, so the table stays unique without one.
+    store.execute(f"CREATE TABLE IF NOT EXISTS vecs(text_hash VARCHAR, vec FLOAT[{dim}])")
+    # How many distinct texts are new (hash column only, so this stays small).
+    n_todo = store.execute(f"""SELECT count(DISTINCT text_hash) FROM (SELECT text_hash FROM read_parquet('{chunks_file}'))
+                               ANTI JOIN vecs USING (text_hash)""").fetchall()[0][0]
+    ctx.log(f"{n_chunks:,} chunks: {n_todo:,} to embed with {label}, {n_chunks - n_todo:,} already in store")
+    done = 0
+    for i, batch in enumerate(iter_parquet(chunks_file, SAVE_EVERY, ["text_hash", "text"])):
+        store.register("batch", batch.select(["text_hash"]))
+        have = {h for (h,) in store.execute("SELECT DISTINCT v.text_hash FROM vecs v SEMI JOIN batch USING (text_hash)").fetchall()}
+        store.unregister("batch")
+        new = {}                                   # text_hash -> text, each new text once
+        for h, t in zip(batch.column("text_hash").to_pylist(), batch.column("text").to_pylist()):
+            if h not in have:
+                new.setdefault(h, t)
+        if not new:
+            continue
+        vecs = encode_fn(list(new.values()))
+        store.register("new_vecs", pa.table({"text_hash": list(new),
                                              "vec": pa.FixedSizeListArray.from_arrays(pa.array(vecs.ravel()), dim)}))
-        store.execute("INSERT OR IGNORE INTO vecs SELECT * FROM new_vecs")
-        ctx.log(f"saved {min(start + SAVE_EVERY, len(todo)):,}/{len(todo):,}")
-    vec_col = store.sql("SELECT v.vec FROM chunks c JOIN vecs v USING (text_hash) ORDER BY c.ord").to_arrow_table().column("vec")
+        store.execute("INSERT INTO vecs SELECT * FROM new_vecs")
+        store.unregister("new_vecs")
+        done += len(new)
+        if i % 20 == 19:
+            store.execute("CHECKPOINT")             # flush inserted vectors to disk, releasing their memory
+        ctx.log(f"saved {done:,}/{n_todo:,}")
+    store.execute("CHECKPOINT")
+
+    # One vector per chunk, in chunks.parquet's row order, streamed into a memory-mapped .npy.
+    emb = np.lib.format.open_memmap(ctx.out / "embeddings.npy", mode="w+", dtype=np.float32, shape=(n_chunks, dim))
+    reader = store.sql(f"""SELECT c.file_row_number AS row, v.vec FROM read_parquet('{chunks_file}', file_row_number = true) c
+                           JOIN vecs v USING (text_hash)""").to_arrow_reader(SAVE_EVERY)
+    filled = 0
+    for rb in reader:
+        rows = rb.column("row").to_numpy()
+        emb[rows] = rb.column("vec").flatten().to_numpy(zero_copy_only=False).reshape(-1, dim)
+        filled += len(rows)
+    emb.flush()
+    del emb
     store.close()
-    emb = vec_col.combine_chunks().values.to_numpy(zero_copy_only=False).reshape(-1, dim).astype(np.float32)
-    np.save(ctx.out / "embeddings.npy", emb)
-    return {"n": int(emb.shape[0]), "dim": dim, "embedded": len(todo), "reused": chunks.num_rows - len(todo), **meta}
+    if filled != n_chunks:
+        raise RuntimeError(f"embedding store returned {filled:,} vectors for {n_chunks:,} chunks")
+    return {"n": n_chunks, "dim": dim, "embedded": done, "reused": n_chunks - done, **meta}
 
 
 @register("embed", "sentence_transformers", SentenceTransformersConfig)

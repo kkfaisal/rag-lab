@@ -14,7 +14,6 @@ import time
 import zipfile
 from pathlib import Path
 
-import duckdb
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -209,7 +208,7 @@ def catalog():
     from . import config  # noqa: F401  (registers implementations)
     from .registry import REGISTRY
     stages = {}
-    for stage in ("chunk", "embed", "retrieve", "rerank", "generate"):
+    for stage in ("transform", "chunk", "embed", "retrieve", "rerank", "generate"):
         impls = REGISTRY[stage]
         stages[stage] = [{"impl": name, "doc": (impl.fn.__doc__ or "").strip().split("\n\n")[0],
                           "schema": impl.config_cls.model_json_schema(), "defaults": impl.config_cls().model_dump(),
@@ -642,6 +641,36 @@ def preview_chunk(body: dict = Body(...)):
     except Exception as e:      # user script errors are expected here: show them
         raise HTTPException(400, f"{type(e).__name__}: {e}")
     return {"doc": {**doc, "chars": len(doc["text"])}, "chunks": chunks}
+
+
+@app.post("/api/preview/transform")
+def preview_transform(body: dict = Body(...)):
+    """Run a transform node on one document: {"impl", "params", "dataset", "doc_id"?} -> before / after."""
+    from .registry import get as get_impl
+    from .stages import transform
+    con = _corpus()
+    try:
+        snap = data.latest_snapshot(con, body["dataset"])
+        where = "WHERE doc_id = $id" if body.get("doc_id") else "ORDER BY hash(doc_id || $salt) LIMIT 1"
+        params = {"ds": body["dataset"], "snap": snap, "subset": "all"} | (
+            {"id": body["doc_id"]} if body.get("doc_id") else {"salt": str(time.time())})
+        r = con.execute(f"""SELECT doc_id, source, title, text, CAST(metadata AS VARCHAR)
+                            FROM ({data.docs_sql('v.doc_id, v.source, v.metadata, c.title, c.text')}) {where}""", params).fetchone()
+    except SystemExit as e:
+        raise HTTPException(404, str(e))
+    finally:
+        con.close()
+    if not r:
+        raise HTTPException(404, "document not found")
+    doc = {"doc_id": r[0], "source": r[1], "title": r[2] or "", "text": r[3], "metadata": json.loads(r[4]) if r[4] else {}}
+    if body["impl"] == "none":
+        return {"before": doc, "after": doc}
+    try:
+        cfg = get_impl("transform", body["impl"]).config_cls(**(body.get("params") or {}))
+        after = transform.make_transform(body["impl"], cfg)(dict(doc))
+    except Exception as e:      # user script errors are expected here: show them
+        raise HTTPException(400, f"{type(e).__name__}: {e}")
+    return {"before": doc, "after": None if after is None else {**doc, **after}}
 
 
 @app.post("/api/preview/query")

@@ -54,7 +54,7 @@ def resolve(raw: dict, stages: list[str] = STAGES) -> dict:
         raise SystemExit(f"Unknown top-level config keys: {sorted(unknown)}")
     for stage in stages:
         block = dict(raw.get(stage) or {})
-        impl_name = block.pop("impl", "none" if stage == "rerank" else None)
+        impl_name = block.pop("impl", "none" if stage in ("rerank", "transform") else None)
         if impl_name is None:
             raise SystemExit(f"Config is missing `{stage}: {{impl: ...}}`")
         impl = get(stage, impl_name)

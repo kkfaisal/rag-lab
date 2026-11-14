@@ -277,10 +277,10 @@ def _seed() -> None:
 # ----------------------------------------------------------------------------- code editor
 
 @app.get("/api/scripts/versions")
-def script_versions(key: str):
-    """Saved versions of one script, newest first (see versions.py for keys)."""
+def script_versions(key: str, code: bool = False):
+    """Saved versions of one script, newest first (see versions.py for keys); code=true includes each one's code."""
     try:
-        return versions.listing(key)
+        return list(reversed(versions.history(key))) if code else versions.listing(key)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

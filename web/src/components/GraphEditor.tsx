@@ -58,11 +58,14 @@ interface Props {
   onChange: (g: Graph) => void
   extra?: (n: GraphNode, g: Graph) => ReactNode   // extra controls in the settings panel (previews)
   status?: Record<string, NodeStatus>              // per node: its part in the latest run
+  selected?: string | null                          // the selected node (owned by the page, so it survives a save)
+  onSelect?: (id: string | null) => void
+  onSaveScript?: (nodeId: string, code: string) => Promise<unknown>   // save a script node now (saves the pipeline)
 }
 
 // A node canvas (React Flow) plus a settings panel for the selected node.
 // The same component edits ingestion and retrieval pipelines.
-export default function GraphEditor({ kind, graph, catalog, datasets, targets, onChange, extra, status }: Props) {
+export default function GraphEditor({ kind, graph, catalog, datasets, targets, onChange, extra, status, selected, onSelect, onSaveScript }: Props) {
   const stages = catalog.kinds[kind]
   const describe = useCallback((n: GraphNode): { title: string; summary: string } => {
     if (n.stage === 'source') return { title: String(n.params.dataset || 'Choose a dataset'), summary: `subset ${n.params.subset ?? 'all'} · snapshot ${n.params.snapshot ?? 'latest'}` }
@@ -80,7 +83,9 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
   }), [stages])
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<RFData>>(graph.nodes.map(toRF))
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(graph.edges.map(e => ({ id: `${e.source}>${e.target}`, ...e })))
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [ownSelected, setOwnSelected] = useState<string | null>(null)
+  const selectedId = selected !== undefined ? selected : ownSelected
+  const setSelectedId = (id: string | null) => { setOwnSelected(id); onSelect?.(id) }
 
   // Report every change upward in our own (React Flow independent) graph format.
   useEffect(() => {
@@ -210,7 +215,8 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
             </div>)}
 
           {info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} scriptKind={sel.stage}
-            versionKey={graph.id ? `${kind}/${graph.id}/${sel.id}` : undefined} />}
+            versionKey={graph.id ? `${kind}/${graph.id}/${sel.id}` : undefined}
+            onSaveScript={onSaveScript && (code => { update(sel.id, { params: { ...sel.params, code } }); return onSaveScript(sel.id, code) })} />}
 
           {info?.source && sel.impl !== 'python' && <BuiltinCode key={sel.id + sel.impl} node={sel} info={info}
             onConvert={params => update(sel.id, { impl: 'python', params })} />}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { errText, fmt, get, send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type Job, type Target } from '../api'
 import GraphEditor, { type NodeStatus } from '../components/GraphEditor'
@@ -107,10 +107,14 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
   }, [id, graphs, nav, t.path])
 
   const dirty = graph !== undefined && strip(graph) !== saved
-  const save = async (): Promise<Graph | undefined> => {
-    if (!graph) return
+  const latest = useRef<Graph | undefined>(undefined)       // the graph as the editor last reported it
+  latest.current = graph
+  const [selected, setSelected] = useState<string | null>(null)   // kept here so a save (which remounts the editor) keeps it
+  const save = async (override?: Graph): Promise<Graph | undefined> => {
+    const body = override ?? graph
+    if (!body) return
     try {
-      const g = await send<Graph>('PUT', `/api/graphs/${kind}`, graph)
+      const g = await send<Graph>('PUT', `/api/graphs/${kind}`, body)
       setError(undefined); setGraph(g); setSaved(strip(g)); await reload()
       nav(`${t.path}/${g.id}`, { replace: true })
       return g
@@ -186,6 +190,11 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
         {live.summary && <RunBanner s={live.summary} />}
 
         <GraphEditor status={live.status} key={`${kind}:${graph.id ?? 'new'}:${graph.updated_at ?? ''}`} kind={kind} graph={graph} catalog={catalog} datasets={datasets} targets={targets}
+          selected={selected} onSelect={setSelected}
+          onSaveScript={(nodeId, code) => {      // save one node's script now: the whole pipeline is saved, recording a version
+            const g = latest.current!
+            return save({ ...g, nodes: g.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, code } } : n) })
+          }}
           onChange={setGraph} extra={(n, g) => kind !== 'ingestion' ? null : n.stage === 'chunk' ? <ChunkPreview node={n} graph={g} />
             : n.stage === 'transform' ? <TransformPreview node={n} graph={g} /> : null} />
 

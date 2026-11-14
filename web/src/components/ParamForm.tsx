@@ -1,12 +1,16 @@
 import type { ImplInfo, SchemaProp } from '../api'
 import CodeEditor from './CodeEditor'
+import ScriptVersions from './ScriptVersions'
 
 const typesOf = (p: SchemaProp): string[] => (p.type ? [p.type] : (p.anyOf ?? []).map(a => a.type ?? '').filter(Boolean))
 
 // A settings form generated from an implementation's JSON schema (which the
 // backend derives from its Pydantic config class), so new implementations and
 // new parameters show up in the UI without any frontend change.
-export default function ParamForm({ info, params, onChange, scriptKind, versionKey }: { info: ImplInfo; params: Record<string, unknown>; onChange: (p: Record<string, unknown>) => void; scriptKind?: string; versionKey?: string }) {
+export default function ParamForm({ info, params, onChange, scriptKind, versionKey, onSaveScript }: {
+  info: ImplInfo; params: Record<string, unknown>; onChange: (p: Record<string, unknown>) => void; scriptKind?: string
+  versionKey?: string; onSaveScript?: (code: string) => Promise<unknown>
+}) {
   const props = info.schema.properties ?? {}
   const set = (k: string, v: unknown) => onChange({ ...params, [k]: v })
   return (
@@ -16,7 +20,10 @@ export default function ParamForm({ info, params, onChange, scriptKind, versionK
         const nullable = types.includes('null')
         const v = params[key] ?? info.defaults[key] ?? null
         if (key === 'code') return (
-          <div key={key} className="field wide"><label>Python</label><CodeEditor value={String(v ?? '')} onChange={c => set(key, c)} kind={scriptKind} versionKey={versionKey} /></div>)
+          <div key={key} className="field wide">
+            <ScriptVersions code={String(v ?? '')} versionKey={versionKey} onPick={c => set(key, c)} onSave={onSaveScript} />
+            <CodeEditor value={String(v ?? '')} onChange={c => set(key, c)} kind={scriptKind} versionKey={versionKey}
+              onStudioSave={onSaveScript ? c => { set(key, c); onSaveScript(c) } : undefined} /></div>)
         if (key === 'system_prompt') return (
           <div key={key} className="field wide"><label>{key}</label>
             <textarea rows={8} value={String(v ?? '')} onChange={e => set(key, e.target.value)} /></div>)

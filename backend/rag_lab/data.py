@@ -260,6 +260,10 @@ def ingest_source(dataset: str, source: str, params: dict, sync: bool = False) -
     folder = dataset_dir(dataset)
     if source == "extract":
         run_extractor(folder, params.get("code") or "")
+        if dataset == BENCH:            # its documents stay zipped; read with its own reader, then build "dev"
+            snap = ingest(dataset, folder, adapter=BENCH, sync=True, note="EnterpriseRAG-Bench release")
+            build_subset(dataset, "dev")
+            return snap
         return ingest(dataset, folder, adapter="folder", sync=True, note="extractor")
     if source == "folder":
         if not folder.is_dir():

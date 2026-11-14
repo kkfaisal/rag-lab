@@ -20,7 +20,7 @@ export default function Datasets() {
   const { name } = useParams()
   const [loaded, setLoaded] = useState<DatasetInfo[] | null>(null)
   const [folders, setFolders] = useState<(FolderSummary & { name: string })[] | null>(null)
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState<string | null>(null)     // null = closed, '' = new, name = a public dataset
   const jobs = useJobs()
   const busy = jobs.filter(isActive).length
   const reload = useCallback(() => {
@@ -42,13 +42,14 @@ export default function Datasets() {
   return (
     <>
       <PageHead title="Datasets" sub="A dataset is a folder in data/datasets/ with documents (.txt, .md, .jsonl) and a questions.jsonl. Loading a folder reads it into the document store as a snapshot; ingestion pipelines then chunk it and write it to a target, embedded, BM25-indexed or both.">
-        <button className="primary" onClick={() => setCreating(c => !c)}>New dataset</button>
+        <button className="primary" onClick={() => setCreating(c => c === '' ? null : '')}>New dataset</button>
       </PageHead>
-      {creating && <NewDataset existing={rows.map(r => r.name)} onClose={() => setCreating(false)} onDone={reload} />}
+      {creating !== null && <NewDataset key={creating} existing={rows.map(r => r.name)} initial={creating || undefined}
+        onClose={() => setCreating(null)} onDone={reload} />}
       {jobs.some(j => j.kind === 'dataset') && <><div className="section-title">Recent dataset jobs</div><JobList jobs={jobs} kinds={['dataset']} limit={3} /></>}
 
       {loaded === null || folders === null ? <p className="muted">Loading…</p> : rows.length === 0 ? (
-        <Empty>No datasets yet. Download EnterpriseRAG-Bench, run a Python extractor, or put a folder in <code>data/datasets/</code>.</Empty>
+        <Empty>No datasets on this machine yet. Get one of the public datasets below (each is a Python extractor script you can read first), create your own with <b>New dataset</b>, or put a folder in <code>data/datasets/</code>.</Empty>
       ) : (
         <div className="table-wrap" style={{ marginTop: 14 }}><table>
           <thead><tr><th>dataset</th><th>state</th><th className="num">documents</th><th className="num">questions</th><th className="num">files</th><th className="num">size on disk</th><th>origin</th></tr></thead>
@@ -60,9 +61,13 @@ export default function Datasets() {
               <td className="num">{r.loaded ? r.loaded.n_questions.toLocaleString() : r.folder?.has_questions ? 'file ready' : '–'}</td>
               <td className="num">{r.folder?.exists ? r.folder.n_files.toLocaleString() : '–'}</td>
               <td className="num">{r.folder?.exists ? bytes(r.folder.size) : '–'}</td>
-              <td className="small muted">{r.name === BENCH ? 'EnterpriseRAG-Bench' : r.folder?.has_extractor ? 'Python extractor' : 'local files'}</td>
+              <td className="small muted">{r.folder?.has_extractor ? 'Python extractor' : r.name === BENCH ? 'EnterpriseRAG-Bench' : 'local files'}</td>
             </tr>))}</tbody>
         </table></div>)}
+
+      <div className="section-title" style={{ marginTop: 22 }}>Public datasets <span className="muted">· downloaded to this machine by a Python extractor; not part of the repository</span></div>
+      <PublicDatasets loaded={(loaded ?? []).map(d => d.name)} onGet={name => { setCreating(name); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      <p className="small faint">Each dataset keeps its own license (EnterpriseRAG-Bench: MIT; BEIR sets: see their Hugging Face cards). From a terminal: <code>uv run python scripts/get_datasets.py --list</code>.</p>
     </>
   )
 }
@@ -74,38 +79,60 @@ function StateBadge({ row }: { row: Row }) {
   return <Pill status="ok">loaded · #{row.loaded.latest_snapshot}</Pill>
 }
 
-function NewDataset({ existing, onClose, onDone }: { existing: string[]; onClose: () => void; onDone: () => void }) {
+interface PublicDataset { name: string; description: string; size: string; downloaded: boolean }
+
+// Public datasets, each fetched by a Python extractor script you can read and edit first.
+// On a fresh install this is how data gets onto the machine; nothing is in the repository.
+function PublicDatasets({ loaded, onGet }: { loaded: string[]; onGet: (name: string) => void }) {
+  const [list, setList] = useState<PublicDataset[]>()
+  useEffect(() => { get<PublicDataset[]>('/api/benchmarks').then(setList).catch(() => setList([])) }, [])
+  if (!list) return null
+  return (
+    <div className="table-wrap"><table>
+      <thead><tr><th>public dataset</th><th className="num">download</th><th>what it is</th><th>on this machine</th><th /></tr></thead>
+      <tbody>{list.map(d => (
+        <tr key={d.name}>
+          <td><b>{d.name}</b></td><td className="num small">{d.size}</td><td className="small muted">{d.description}</td>
+          <td>{loaded.includes(d.name) ? <Pill status="ok">loaded</Pill> : d.downloaded ? <Pill status="warn">downloaded</Pill> : <span className="small faint">–</span>}</td>
+          <td className="num"><button className="sm" onClick={() => onGet(d.name)}>{loaded.includes(d.name) ? 'Refresh' : 'Get'}</button></td>
+        </tr>))}</tbody>
+    </table></div>)
+}
+
+function NewDataset({ existing, initial, onClose, onDone }: { existing: string[]; initial?: string; onClose: () => void; onDone: () => void }) {
   const nav = useNavigate()
-  const [kind, setKind] = useState<'bench' | 'extract' | 'folder'>('extract')
-  const [name, setName] = useState('scifact')
+  const [kind, setKind] = useState<'extract' | 'folder'>('extract')
+  const [name, setName] = useState(initial ?? 'my_dataset')
   const [code, setCode] = useState<string>()
   const [error, setError] = useState<string>()
   const valid = NAME_RE.test(name)
   const taken = existing.includes(name)
-  useEffect(() => { get<{ contracts: Record<string, { template: string }> }>('/api/scripts/info').then(r => setCode(r.contracts.extract.template)).catch(() => {}) }, [])
+  useEffect(() => {      // a public dataset's own extractor, or the template for a new one
+    const url = initial ? `/api/benchmarks/${initial}/extractor` : null
+    ;(url ? get<{ code: string }>(url).then(r => r.code)
+      : get<{ contracts: Record<string, { template: string }> }>('/api/scripts/info').then(r => r.contracts.extract.template))
+      .then(setCode).catch(e => setError(errText(e)))
+  }, [initial])
 
   const go = async () => {
     setError(undefined)
     try {
-      if (kind === 'bench') await send('POST', `/api/datasets/${BENCH}/ingest`, { source: 'enterprise_rag_bench' })
-      else if (kind === 'extract') await send('POST', `/api/datasets/${name}/ingest`, { source: 'extract', params: { code } })
+      if (kind === 'extract') await send('POST', `/api/datasets/${name}/ingest`, { source: 'extract', params: { code } })
       else await send('POST', `/api/datasets/${name}/folder`)
-      onDone(); onClose(); nav(`/datasets/${kind === 'bench' ? BENCH : name}`)
+      onDone(); onClose(); nav(`/datasets/${name}`)
     } catch (e) { setError(errText(e)) }
   }
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
-      <div className="card-head"><h2>New dataset</h2><div className="actions"><button className="ghost sm" onClick={onClose}>Close</button></div></div>
-      <div className="option-cards">
-        <div className={`option ${kind === 'bench' ? 'selected' : ''}`} onClick={() => setKind('bench')}>
-          <b>EnterpriseRAG-Bench</b><span>Built-in. Downloads the release (1.26 GB) into data/datasets/enterprise_rag_bench, loads ~512k documents and 500 questions, builds a “dev” subset.</span></div>
+      <div className="card-head"><h2>{initial ? `Get ${initial}` : 'New dataset'}</h2><div className="actions"><button className="ghost sm" onClick={onClose}>Close</button></div></div>
+      {!initial && <div className="option-cards">
         <div className={`option ${kind === 'extract' ? 'selected' : ''}`} onClick={() => setKind('extract')}>
-          <b>Python extractor</b><span>A script downloads data, e.g. a public benchmark, into the dataset’s folder; then the folder is loaded. The template fetches BEIR SciFact.</span></div>
+          <b>Python extractor</b><span>A script downloads or converts data into the dataset’s folder; then the folder is loaded. The template fetches a BEIR benchmark.</span></div>
         <div className={`option ${kind === 'folder' ? 'selected' : ''}`} onClick={() => setKind('folder')}>
           <b>Empty folder</b><span>Creates data/datasets/&lt;name&gt;/. Add files with the file explorer or copy them in, then load.</span></div>
-      </div>
-      {kind !== 'bench' && (
+      </div>}
+      {!initial && (
         <div className="form" style={{ marginTop: 14 }}>
           <div className="field"><label>Dataset name (= folder name)</label>
             <input value={name} placeholder="my_docs" onChange={e => setName(e.target.value.trim())} />
@@ -113,13 +140,15 @@ function NewDataset({ existing, onClose, onDone }: { existing: string[]; onClose
               : taken ? <span className="hint">A dataset with this name exists. {kind === 'extract' ? 'The extractor will refresh its folder.' : ''}</span>
               : <span className="hint">data/datasets/{name || '…'}/</span>}</div>
         </div>)}
-      {kind === 'extract' && code !== undefined && <>
-        <p className="small muted">The script is saved in the folder as <code>extract.py</code>, so you can re-run it later. <code>download(folder)</code> must write documents and a <code>questions.jsonl</code>.</p>
-        <CodeEditor value={code} onChange={setCode} height="300px" kind="extract" title="Extractor script" /></>}
-      {kind === 'bench' && <div className="notice" style={{ marginTop: 12 }}>Takes a few minutes and ~6 GB of disk. {existing.includes(BENCH) ? 'It is already present: this downloads any missing files and reloads it.' : ''}</div>}
+      {kind === 'extract' && <>
+        <p className="small muted">{initial ? <>This script downloads the dataset into <code>data/datasets/{initial}/</code> on this machine. Read or edit it, then run it. </> : null}
+          It is saved in the folder as <code>extract.py</code>, so you can re-run it later; <code>download(folder)</code> must leave documents and a <code>questions.jsonl</code> there.
+          Same as <code>uv run python scripts/get_datasets.py {initial ?? '<name>'} --load</code>.</p>
+        {code !== undefined && <CodeEditor value={code} onChange={setCode} height="300px" kind="extract" title={`Extractor · ${name}`} />}</>}
+      {initial === BENCH && <div className="notice" style={{ marginTop: 12 }}>A 1.3 GB download that takes a few minutes and ~6 GB of disk once loaded. Files already downloaded are skipped.</div>}
       <div className="row" style={{ marginTop: 12 }}><span className="grow" />
-        <button className="primary" disabled={kind !== 'bench' && (!valid || (kind === 'folder' && taken))} onClick={go}>
-          {kind === 'bench' ? 'Download and load' : kind === 'extract' ? 'Run extractor and load' : 'Create folder'}</button></div>
+        <button className="primary" disabled={!valid || (kind === 'folder' && taken) || (kind === 'extract' && code === undefined)} onClick={go}>
+          {kind === 'extract' ? 'Run extractor and load' : 'Create folder'}</button></div>
       <ErrorNote error={error} />
     </div>
   )

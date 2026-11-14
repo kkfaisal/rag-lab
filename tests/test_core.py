@@ -268,6 +268,8 @@ def test_beir_extractor_targets_the_named_dataset():
     assert 'DATASET = "nfcorpus"' in code and 'SPLIT = "dev"' in code and 'DATASET = "scifact"' not in code
     assert scripting.check("extract", code)["ok"]
     assert "enterprise_rag_bench" in benchmarks.BENCHMARKS and "scifact" in benchmarks.BENCHMARKS
+    for entry in benchmarks.catalog():                      # every public dataset has a valid extractor script
+        assert scripting.check("extract", benchmarks.extractor(entry["name"]))["ok"], entry["name"]
 
 
 # ---- canvas graphs

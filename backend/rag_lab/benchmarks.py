@@ -40,6 +40,11 @@ def beir_extractor(name: str, split: str = "test") -> str:
     return re.sub(r'^SPLIT = ".*"', f'SPLIT = "{split}"', code, count=1, flags=re.M)
 
 
+def extractor(name: str, split: str = "test") -> str:
+    """The Python extractor script for a public dataset (EnterpriseRAG-Bench, or a BEIR set)."""
+    return scripting.ERB_EXTRACT_TEMPLATE if name == data.BENCH else beir_extractor(name, split)
+
+
 def _load(fn, name: str) -> None:
     import duckdb
     try:
@@ -53,22 +58,24 @@ def _load(fn, name: str) -> None:
 
 
 def fetch(name: str, load: bool = False, split: str = "test") -> None:
-    """Download benchmark `name` into data/datasets/<name>/; with load=True also load it into the
-    document store so pipelines can use it."""
+    """Run the dataset's extractor script into data/datasets/<name>/ (saved there as extract.py);
+    with load=True also load it into the document store so pipelines can use it."""
     data.migrate_layout()
-    if name == data.BENCH:
-        data.download()
-        if load:
-            _load(lambda: data.ingest_source(name, "folder", {}), name)    # load (+ dev subset below)
-            _load(lambda: data.build_subset(name, "dev"), name)
-        return
     if name not in BENCHMARKS:
         print(f"{name!r} isn't in the list; trying it as a BEIR dataset name.")
-    code = beir_extractor(name, split)
+    code = extractor(name, split)
     data.run_extractor(data.dataset_dir(name), code)                     # download first, without the store
     if load:
         _load(lambda: data.ingest_source(name, "folder", {}, sync=True), name)
+        if name == data.BENCH:
+            _load(lambda: data.build_subset(name, "dev"), name)
     print(f"{name}: data/datasets/{name}/" + ("" if load else "  (load it on the Datasets page, or rerun with --load)"))
+
+
+def catalog() -> list[dict]:
+    """The public datasets, and which of them are already on this machine."""
+    return [{"name": n, "description": desc, "size": size, "downloaded": (paths.DATASETS / n).is_dir()}
+            for n, (desc, size) in BENCHMARKS.items()]
 
 
 def listing() -> str:

@@ -82,6 +82,23 @@ def datasets():
     return info
 
 
+@app.get("/api/benchmarks")
+def public_datasets():
+    """Public datasets that can be downloaded with a Python extractor."""
+    from . import benchmarks
+    return benchmarks.catalog()
+
+
+@app.get("/api/benchmarks/{name}/extractor")
+def public_dataset_extractor(name: str, split: str = "test"):
+    from . import benchmarks
+    try:
+        data.dataset_dir(name)
+    except SystemExit as e:
+        raise HTTPException(400, str(e))
+    return {"code": benchmarks.extractor(name, split)}
+
+
 @app.get("/api/folders")
 def folders():
     """Every folder under data/datasets/, loaded or not."""

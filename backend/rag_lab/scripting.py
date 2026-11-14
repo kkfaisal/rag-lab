@@ -305,6 +305,46 @@ def load_functions(code: str, required: str, optional: tuple[str, ...] = (), ext
     return {name: ns[name] for name in (required, *optional) if callable(ns.get(name))}
 
 
+ERB_EXTRACT_TEMPLATE = '''"""Extractor: download EnterpriseRAG-Bench (https://github.com/onyx-dot-app/EnterpriseRAG-Bench, MIT).
+
+~512k synthetic company documents (Slack, Gmail, Linear, Google Drive, HubSpot, Fireflies,
+GitHub, Jira, Confluence) and 500 questions with gold answers and gold documents.
+
+The documents stay in the release zip (1.3 GB; ~3 GB unpacked), which rag-lab's
+EnterpriseRAG-Bench reader reads directly. After loading, rag-lab builds a "dev" subset:
+100 questions, their gold documents and 20k other documents, for quick experiments.
+Files already in the folder are not downloaded again.
+"""
+from pathlib import Path
+
+import httpx
+
+RELEASE = "https://github.com/onyx-dot-app/EnterpriseRAG-Bench/releases/download/v1.0.0"
+FILES = ["questions.jsonl", "all_documents.zip"]   # or per-source slices, e.g. "slack_slice_0001.zip"
+
+
+def download(folder):
+    folder = Path(folder)
+    for name in FILES:
+        dest = folder / name
+        if dest.exists():
+            print(f"already here: {name}")
+            continue
+        part = dest.with_suffix(dest.suffix + ".part")
+        with httpx.stream("GET", f"{RELEASE}/{name}", follow_redirects=True, timeout=None) as r:
+            r.raise_for_status()
+            total, done = int(r.headers.get("content-length", 0)), 0
+            with open(part, "wb") as f:
+                for block in r.iter_bytes(1 << 20):
+                    f.write(block)
+                    done += len(block)
+                    if total and done % (100 << 20) < (1 << 20):
+                        print(f"{name}: {done / 1e6:,.0f} / {total / 1e6:,.0f} MB", flush=True)
+        part.rename(dest)
+        print(f"downloaded {name}")
+'''
+
+
 # ---------------------------------------------------------------- editor support
 
 # Every kind of script: its starting template and the functions rag-lab calls.

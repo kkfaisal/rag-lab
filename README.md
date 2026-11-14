@@ -71,8 +71,8 @@ uv run rag-lab serve                      # http://127.0.0.1:8000
 
 Then, in the browser:
 
-1. **Datasets → New dataset.** Download EnterpriseRAG-Bench, run a Python extractor (the template
-   fetches BEIR SciFact), or create an empty folder and add files. Then load it.
+1. **Datasets.** Get a public dataset (each is a Python extractor script you can read first), write
+   your own extractor with **New dataset**, or create an empty folder and add files. Then load it.
 2. **Targets.** A local store is created for you; add Qdrant, OpenSearch or a script target if you like.
 3. **Ingestion.** Open the example pipeline, check the source and target nodes, press **Run ingestion**.
 4. **Retrieval.** Open an example pipeline, try a query, press **Run benchmark**.
@@ -118,13 +118,15 @@ the dataset's Extractor tab. Downloads stream to disk, so the large ones don't n
 Without `--load`, load the dataset later from the Datasets page. `uv run rag-lab data get …` does the
 same as the script.
 
-EnterpriseRAG-Bench is built in rather than an `extract.py`: its documents stay in the release zip
-(1.3 GB, rather than ~3 GB unpacked), a dedicated reader takes each document's source type from its
-path, and its questions are scored by the benchmark's own LLM judge (`uv run rag-lab bench setup`).
-Its download skips files that are already there.
+Every public dataset, EnterpriseRAG-Bench included, is fetched by a Python extractor script that is
+saved in its folder as `extract.py`. EnterpriseRAG-Bench's documents stay in the release zip
+(1.3 GB, rather than ~3 GB unpacked), which its own reader reads directly. Its questions can be scored
+by the benchmark's LLM judge (`uv run rag-lab bench setup`), and loading it builds a 100-question `dev`
+subset. Downloads skip files that are already there.
 
-On a fresh install the Datasets page is empty, and rag-lab creates a local target and two example
-retrieval pipelines. The example ingestion pipeline appears once the first dataset with questions is
+On a fresh install the Datasets page lists these public datasets. **Get** opens the dataset's
+extractor script, so you can read or edit it before running it; it then downloads the data to this
+machine and loads it. rag-lab also creates a local target and two example retrieval pipelines. The example ingestion pipeline appears once the first dataset with questions is
 loaded. Each example is created only once, so deleting one doesn't bring it back.
 
 **Licenses.** The data belongs to its authors and is downloaded from them, never redistributed here.

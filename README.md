@@ -34,6 +34,7 @@ git clone <this repo> rag-lab && cd rag-lab
 cp .env.example .env                      # optional: put your ANTHROPIC_API_KEY in .env
 docker compose up -d                      # rag-lab + PostgreSQL/pgvector + Qdrant
 docker compose --profile search up -d     # also OpenSearch and Elasticsearch (~1 GB RAM each)
+docker compose exec rag-lab python scripts/get_datasets.py scifact --load   # a first benchmark (4 MB)
 ```
 
 Open http://127.0.0.1:8000. The Targets page lists the database services and whether each is
@@ -64,6 +65,7 @@ git clone <this repo> rag-lab && cd rag-lab
 uv sync                                   # Python deps (Python 3.12 is pinned)
 cp .env.example .env                      # optional: put your ANTHROPIC_API_KEY in .env
 cd web && npm install && npm run build && cd ..
+uv run python scripts/get_datasets.py scifact --load   # a first benchmark (4 MB); see below
 uv run rag-lab serve                      # http://127.0.0.1:8000
 ```
 
@@ -86,6 +88,48 @@ be run without a browser: `uv run rag-lab ingest <pipeline-id>` and
 `uv run rag-lab benchmark <pipeline-id> [--target <id>] [--limit N]`.
 
 For UI development, run `uv run rag-lab serve` and `cd web && npm run dev` (Vite proxies `/api`).
+
+## Getting the data
+
+No benchmark data is in this repository; `data/` is git-ignored. Each user downloads what they need
+to their own machine with `scripts/get_datasets.py`:
+
+```bash
+uv run python scripts/get_datasets.py --list                      # what's available, with sizes
+uv run python scripts/get_datasets.py scifact nfcorpus --load     # download + load into the document store
+uv run python scripts/get_datasets.py enterprise_rag_bench --load # 1.3 GB, ~512k docs, builds a "dev" subset
+uv run python scripts/get_datasets.py msmarco --split dev         # BEIR: pick the question split
+```
+
+| Benchmark | Download | What it is |
+|---|---|---|
+| `enterprise_rag_bench` | 1.3 GB | ~512k synthetic company documents (Slack, Confluence, Jira, …), 500 questions with gold answers |
+| `scifact` | 4 MB | 5k scientific abstracts, 300 claims |
+| `nfcorpus` | 3 MB | 3.6k nutrition and medical articles, 323 questions |
+| `arguana` | 6 MB | 8.7k arguments, 1.4k counter-argument queries |
+| `scidocs`, `quora`, `fiqa` | 19–28 MB | papers, duplicate questions, financial forum posts |
+| `trec-covid`, `webis-touche2020` | 111–357 MB | COVID papers, controversial-topic arguments |
+| `nq`, `hotpotqa`, `dbpedia-entity`, `msmarco`, `climate-fever`, `fever` | 0.8–2 GB | millions of Wikipedia or web passages |
+
+Every dataset lands in `data/datasets/<name>/` as `docs.jsonl` + `questions.jsonl`. Any other
+[BEIR](https://huggingface.co/BeIR) name works too. BEIR sets come from their Hugging Face mirror
+through the extractor template, saved as `extract.py` in the folder so you can edit and re-run it from
+the dataset's Extractor tab. Downloads stream to disk, so the large ones don't need much memory.
+Without `--load`, load the dataset later from the Datasets page. `uv run rag-lab data get …` does the
+same as the script.
+
+EnterpriseRAG-Bench is built in rather than an `extract.py`: its documents stay in the release zip
+(1.3 GB, rather than ~3 GB unpacked), a dedicated reader takes each document's source type from its
+path, and its questions are scored by the benchmark's own LLM judge (`uv run rag-lab bench setup`).
+Its download skips files that are already there.
+
+On a fresh install the Datasets page is empty, and rag-lab creates a local target and two example
+retrieval pipelines. The example ingestion pipeline appears once the first dataset with questions is
+loaded. Each example is created only once, so deleting one doesn't bring it back.
+
+**Licenses.** The data belongs to its authors and is downloaded from them, never redistributed here.
+EnterpriseRAG-Bench is MIT; the BEIR datasets have their own licenses (see each dataset's card on
+Hugging Face). Check them before you use or share the data.
 
 ## Datasets
 
@@ -361,5 +405,6 @@ at a time, each in its own subprocess, with a log you can open in the UI.
 
 ## License
 
-MIT. EnterpriseRAG-Bench data and code are MIT-licensed by their authors and are downloaded, not
-redistributed, by this repo.
+MIT (see `LICENSE`). Benchmark datasets are not included: `scripts/get_datasets.py` downloads them
+from their authors, and each keeps its own license (EnterpriseRAG-Bench: MIT; BEIR datasets: see
+their dataset cards).

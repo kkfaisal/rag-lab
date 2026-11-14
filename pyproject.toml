@@ -1,7 +1,7 @@
 [project]
 name = "rag-lab"
 version = "0.1.0"
-description = "Iterate on RAG pipelines against EnterpriseRAG-Bench, with every experiment versioned and browsable."
+description = "An end-to-end playground for building and benchmarking RAG pipelines: datasets, ingestion, targets, retrieval, evaluation."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<3.14"

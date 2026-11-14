@@ -1,4 +1,4 @@
-"""rag-lab: iterate on RAG pipelines against EnterpriseRAG-Bench."""
+"""rag-lab: build, run and benchmark RAG ingestion and retrieval pipelines."""
 
 # Verify HTTPS with the operating system's certificate store (not only Python's bundled
 # list), so downloads work behind company proxies that re-sign TLS traffic.

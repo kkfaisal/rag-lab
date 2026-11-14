@@ -187,20 +187,37 @@ def compile_benchmark(pipeline: dict, target_id: str | None = None) -> tuple[dic
     return cfg, meta, bench.get("limit") or None
 
 
+def seeding_done() -> bool:
+    marker = paths.WORKSPACE / "seeded.json"
+    return marker.exists() and {"target", "ingestion", "retrieval"} <= set(json.loads(marker.read_text()))
+
+
 def seed(default_dataset: str | None, subset: str = "all") -> None:
-    """First start: one local target, one ingestion pipeline, two retrieval pipelines."""
-    if not list_targets():
+    """First start: one local target, one ingestion pipeline, two retrieval pipelines. Each is created
+    once (recorded in workspace/seeded.json), so deleting an example doesn't bring it back. The ingestion
+    example waits until a dataset with questions exists."""
+    marker = paths.WORKSPACE / "seeded.json"
+    done = set(json.loads(marker.read_text())) if marker.exists() else set()
+    before = set(done)
+    if not list_targets() and "target" not in done:
         save_target({"name": "Local store", "type": "local", "description": "Vectors + BM25 in a file on disk.",
                      "params": {"vectors": True, "bm25": True}})
+    done.add("target")
+    if not list_targets():
+        _write_marker(marker, done, before)
+        return
     tid = list_targets()[0]["id"]
-    if default_dataset and not list_graphs("ingestion"):
+    if default_dataset and not list_graphs("ingestion") and "ingestion" not in done:
+        done.add("ingestion")
         save_graph("ingestion", {"name": "Baseline ingestion", "description": "Fixed-size chunks, local embeddings.", "nodes": [
             {"id": "source", "stage": "source", "impl": "dataset", "params": {"dataset": default_dataset, "subset": subset, "snapshot": "latest"}, "position": {"x": 0, "y": 60}},
             {"id": "chunk", "stage": "chunk", "impl": "fixed", "params": {"chunk_size": 1200, "overlap": 150}, "position": {"x": 290, "y": 60}},
             {"id": "embed", "stage": "embed", "impl": "sentence_transformers", "params": {"model": "BAAI/bge-small-en-v1.5"}, "position": {"x": 580, "y": 60}},
             {"id": "target", "stage": "target", "impl": "target", "params": {"target_id": tid, "mode": "append"}, "position": {"x": 870, "y": 60}}],
             "edges": [{"source": "source", "target": "chunk"}, {"source": "chunk", "target": "embed"}, {"source": "embed", "target": "target"}]})
-    if not list_graphs("retrieval"):
+    if default_dataset or list_graphs("ingestion"):
+        done.add("ingestion")
+    if not list_graphs("retrieval") and "retrieval" not in done:
         def chain(name, desc, steps):
             nodes = [{"id": "target", "stage": "target", "impl": "target", "params": {"target_id": tid}, "position": {"x": 0, "y": 60}}]
             for i, (stage, impl, params) in enumerate(steps, 1):
@@ -212,3 +229,11 @@ def seed(default_dataset: str | None, subset: str = "all") -> None:
         chain("Hybrid + rerank", "BM25 + vector fused with RRF, then a cross-encoder.",
               [("retrieve", "hybrid", {"top_k": 50}), ("rerank", "cross_encoder", {"top_n": 10}),
                ("benchmark", "benchmark", {"limit": 20, "judge": "auto"})])
+    done.add("retrieval")
+    _write_marker(marker, done, before)
+
+
+def _write_marker(marker: Path, done: set, before: set) -> None:
+    if done != before:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(sorted(done)))

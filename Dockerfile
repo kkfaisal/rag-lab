@@ -17,6 +17,7 @@ ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 UV_PROJECT_ENVIRONMENT=/opt/venv PAT
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY backend/ backend/
+COPY scripts/ scripts/
 RUN uv sync --frozen --no-dev
 COPY --from=web /web/dist web/dist
 EXPOSE 8000

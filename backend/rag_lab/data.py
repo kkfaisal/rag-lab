@@ -90,7 +90,7 @@ def _download(url: str, dest: Path) -> None:
 
 def download(slices: list[str] | None = None) -> None:
     """Fetch EnterpriseRAG-Bench questions.jsonl plus all_documents.zip (default) or
-    the named per-source slice zips, e.g. ["slack_slice_0001"], into data/raw/."""
+    the named per-source slice zips, e.g. ["slack_slice_0001"], into data/datasets/enterprise_rag_bench/."""
     paths.RAW.mkdir(parents=True, exist_ok=True)
     _download(f"{RELEASE_URL}/questions.jsonl", paths.QUESTIONS_FILE)
     for name in slices or ["all_documents"]:

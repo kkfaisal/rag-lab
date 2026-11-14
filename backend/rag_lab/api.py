@@ -245,7 +245,9 @@ def _guard(fn):
 
 
 def _seed() -> None:
-    if workspace.list_targets():
+    """Example target and pipelines. On a fresh install there is no dataset yet, so the example
+    ingestion pipeline is added later, once the first dataset with questions has been loaded."""
+    if workspace.seeding_done():
         return
     first = max((d for d in datasets() if d["n_questions"]), key=lambda d: d["n_questions"], default=None)
     workspace.seed(first["name"] if first else None, "dev" if first and "dev" in first["subsets"] else "all")

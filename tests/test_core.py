@@ -262,6 +262,14 @@ def test_clean_transform_script_equivalent_matches():
         assert fn(dict(doc)) == builtin(dict(doc))
 
 
+def test_beir_extractor_targets_the_named_dataset():
+    from rag_lab import benchmarks
+    code = benchmarks.beir_extractor("nfcorpus", "dev")
+    assert 'DATASET = "nfcorpus"' in code and 'SPLIT = "dev"' in code and 'DATASET = "scifact"' not in code
+    assert scripting.check("extract", code)["ok"]
+    assert "enterprise_rag_bench" in benchmarks.BENCHMARKS and "scifact" in benchmarks.BENCHMARKS
+
+
 # ---- canvas graphs
 
 def test_graphs_compile_to_configs():

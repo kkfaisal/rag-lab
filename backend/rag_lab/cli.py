@@ -40,6 +40,19 @@ def data_add(dataset: str = typer.Argument(..., help="Dataset name = its folder 
     data.ingest_source(dataset, source, params, sync=sync)
 
 
+@data_app.command("get")
+def data_get(names: list[str] = typer.Argument(None, help="Benchmarks to download (omit to list them)"),
+             load: bool = typer.Option(False, help="Also load them into the document store"),
+             split: str = typer.Option("test", help="BEIR question split: test, dev or train")):
+    """Download public benchmarks into data/datasets/<name>/ (same as scripts/get_datasets.py)."""
+    from . import benchmarks
+    if not names:
+        typer.echo(benchmarks.listing())
+        return
+    for name in names:
+        benchmarks.fetch(name, load=load, split=split)
+
+
 @data_app.command("list")
 def data_list():
     """Datasets, their snapshots and doc counts."""

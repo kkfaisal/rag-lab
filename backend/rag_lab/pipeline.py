@@ -181,7 +181,9 @@ def run_ingest(raw: dict, meta: dict | None = None, on_start=None) -> str:
     try:
         for stage in INGEST_STAGES:
             run.stage(stage, {"docs": docs_hash} if stage == "load" else None,
-                      corpus=corpus, dataset=dataset, snapshot=snapshot, subset=subset)
+                      corpus=corpus if stage == "load" else None, dataset=dataset, snapshot=snapshot, subset=subset)
+            if stage == "load":
+                corpus.close()      # only load reads the document store: release it so datasets can be loaded meanwhile
         run.step("write", f"{target_def['type']} [{mode}]", lambda: _write_target(run, target_def, mode, dataset, subset, snapshot))
     except BaseException as e:
         error = e

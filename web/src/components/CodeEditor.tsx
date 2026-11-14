@@ -35,7 +35,9 @@ export default function CodeEditor({ value, onChange, height = '320px', readOnly
     <div className="code-editor">
       <div className="code-bar">
         <span className="small faint">{readOnly ? 'Python · read-only' : 'Python'}</span>
-        <button className="sm ghost" onClick={() => setOpen(true)} title="Open a full-window editor">⤢ {readOnly && !onStudioSave ? 'Expand' : 'Open editor'}</button>
+        {readOnly && !onStudioSave
+          ? <button className="sm ghost" onClick={() => setOpen(true)} title="View in a full window">⤢ Expand</button>
+          : <button className="sm primary" onClick={() => setOpen(true)} title="Edit in a full-window editor with checks, versions and AI help">✎ Edit script</button>}
       </div>
       <CodeMirror value={value} height={height} theme={dark() ? 'dark' : 'light'} extensions={[python()]}
         basicSetup={{ foldGutter: false, highlightActiveLine: false }} onChange={onChange} readOnly={readOnly} editable={!readOnly} />

@@ -251,7 +251,6 @@ function BuiltinCode({ node, info, onConvert, onSave }: {
     <div style={{ marginTop: 10 }}>
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
         <span className="small"><b>Python</b> <span className="faint">{eq ? 'what this node runs, with its settings' : `built-in · ${info.source_file}`}</span></span>
-        {eq && <button className="sm" title="Replace this node with an editable script that does the same thing" onClick={() => onConvert(eq)}>Edit as Python script</button>}
       </div>
       <CodeEditor value={code} readOnly height="240px" kind={node.stage} title={`${node.stage} · ${node.impl}${eq ? '' : ` (${info.source_file})`}`}
         onStudioSave={eq ? c => { if (onSave) onSave(eq, c); else onConvert({ ...eq, code: c }) } : undefined}

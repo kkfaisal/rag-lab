@@ -4,6 +4,11 @@ An open-source, end-to-end **playground for RAG pipelines**. Bring data, build i
 retrieval pipelines on a node canvas, run them from the browser, and benchmark every combination
 against a question set.
 
+| | |
+|---|---|
+| ![A retrieval pipeline with an agentic generate node](docs/screenshots/pipeline.png) | ![Comparing single-pass and agentic RAG with a paired significance test](docs/screenshots/compare.png) |
+| ![The How it works page](docs/screenshots/how-it-works.png) | ![All retrieval pipelines](docs/screenshots/retrieval.png) |
+
 ## The model
 
 | Thing | What it is |

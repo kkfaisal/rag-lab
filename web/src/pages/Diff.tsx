@@ -21,7 +21,7 @@ function Verdict({ t, metric }: { t: PairedTest; metric: string }) {
         <div className="stat"><div className="v">{t.ci95 ? `${sign(t.ci95[0])} … ${sign(t.ci95[1])}` : '–'}</div><div className="k">95% confidence interval</div></div>
         <div className="stat"><div className="v">{t.b_better} / {t.a_better} / {t.ties}</div><div className="k">questions B better / A better / tied</div></div>
       </div>
-      <p style={{ margin: '8px 0 0' }}><b>{t.verdict}.</b> <span className="small muted">Paired permutation test over {t.n} questions; the interval is a bootstrap over questions. If it includes 0, the runs can’t be told apart on this metric.</span></p>
+      <p style={{ margin: '8px 0 0' }}><b>{t.verdict}.</b> <span className="small muted">The verdict comes from a paired permutation test over {t.n} questions. The interval (a bootstrap over questions) shows the likely size of the gap; with few questions it is too narrow, so trust the verdict.</span></p>
     </div>)
 }
 

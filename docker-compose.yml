@@ -1,0 +1,86 @@
+# rag-lab plus the databases it can write to.
+#
+#   docker compose up -d                     rag-lab + Postgres/pgvector + Qdrant
+#   docker compose --profile search up -d    ...also OpenSearch and Elasticsearch (~1 GB RAM each)
+#   docker compose up -d postgres qdrant     only the databases (run rag-lab itself with uv)
+#
+# Data, caches, runs and your pipelines stay in this folder (bind mounts), so the
+# container and a local `uv run rag-lab serve` see the same experiments; don't run both at once.
+# All ports are published on 127.0.0.1 only. Postgres uses host port 5433 so it doesn't clash
+# with a Postgres you may already run on 5432.
+
+name: rag-lab
+
+x-search-env: &search-env
+  discovery.type: single-node
+  OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+  ES_JAVA_OPTS: -Xms512m -Xmx512m
+
+services:
+  rag-lab:
+    build: .
+    image: rag-lab:local
+    ports: ["127.0.0.1:8000:8000"]
+    env_file: [{ path: .env, required: false }]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-raglab}
+      # $$ keeps ${POSTGRES_PASSWORD} literal: rag-lab fills it in from the environment at connect time.
+      RAG_LAB_POSTGRES_URL: postgresql://raglab:$${POSTGRES_PASSWORD}@postgres:5432/raglab
+      RAG_LAB_QDRANT_URL: http://qdrant:6333
+      RAG_LAB_OPENSEARCH_URL: http://opensearch:9200
+      RAG_LAB_ELASTICSEARCH_URL: http://elasticsearch:9200
+    volumes:
+      - ./data:/app/data
+      - ./cache:/app/cache
+      - ./runs:/app/runs
+      - ./workspace:/app/workspace
+      - ./.bench:/app/.bench
+      - ./import:/app/import            # folders for the "Local folder" data source (path: import/<name>)
+      - hf-cache:/hf-cache              # downloaded embedding / reranker models
+    depends_on:
+      postgres: { condition: service_healthy }
+      qdrant: { condition: service_started }
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: raglab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-raglab}
+      POSTGRES_DB: raglab
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raglab"]
+      interval: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    ports: ["127.0.0.1:6333:6333"]
+    volumes: [qdrant-data:/qdrant/storage]
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    profiles: [search]
+    environment:
+      <<: *search-env
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+    ports: ["127.0.0.1:9200:9200"]
+    volumes: [opensearch-data:/usr/share/opensearch/data]
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.1.5
+    profiles: [search]
+    environment:
+      <<: *search-env
+      xpack.security.enabled: "false"
+    ports: ["127.0.0.1:9201:9200"]
+    volumes: [es-data:/usr/share/elasticsearch/data]
+
+volumes:
+  hf-cache:
+  pg-data:
+  qdrant-data:
+  opensearch-data:
+  es-data:

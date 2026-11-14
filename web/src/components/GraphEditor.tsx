@@ -199,7 +199,7 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
                 {catalog.has_api_key ? '' : ' No ANTHROPIC_API_KEY is set, so LLM answers and judging are off.'}</span></div>
             </div>)}
 
-          {info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} />}
+          {info && <ParamForm key={sel.id + sel.impl} info={info} params={sel.params} onChange={p => update(sel.id, { params: p })} scriptKind={sel.stage} />}
 
           {info?.source && sel.impl !== 'python' && (
             <div style={{ marginTop: 10 }}>
@@ -210,7 +210,7 @@ export default function GraphEditor({ kind, graph, catalog, datasets, targets, o
                     onClick={() => send<Record<string, unknown>>('POST', '/api/script-equivalent', { stage: sel.stage, impl: sel.impl, params: sel.params })
                       .then(params => update(sel.id, { impl: 'python', params }))}>Edit as Python script</button>)}
               </div>
-              <CodeEditor key={sel.stage + sel.impl} value={info.source} readOnly height="240px" />
+              <CodeEditor key={sel.stage + sel.impl} value={info.source} readOnly height="240px" title={`Built-in ${sel.stage} · ${info.source_file}`} />
             </div>)}
           {extra?.(sel, { ...graph, nodes: nodes.map(n => n.data.node), edges })}
         </>}

@@ -1,10 +1,11 @@
 """Fast tests: no model downloads, no network. Everything runs in a temp project root (see conftest)."""
 
 import json
+import uuid
 
 import pytest
 
-from rag_lab import cache, data, paths, pipeline, scripting, workspace
+from rag_lab import cache, data, paths, pipeline, scripting, services, workspace
 from rag_lab.config import resolve
 from rag_lab.registry import INGEST_STAGES
 from rag_lab.stages import chunk
@@ -116,13 +117,38 @@ def test_script_data_source(tmp_path):
 
 # ---- targets: append / overwrite, and every testable type behaves the same
 
-@pytest.mark.parametrize("ttype", ["local", "qdrant", "python"])
+SERVER_PARAMS = {   # server-backed target types; each test run uses its own table / index
+    "pgvector": lambda n: {"table": n}, "opensearch": lambda n: {"index": n},
+    "elasticsearch": lambda n: {"index": n}, "qdrant-server": lambda n: {"url": services.url("qdrant"), "collection": n},
+    "sql-postgres": lambda n: {"url": services.url("pgvector").replace("postgresql://", "postgresql+psycopg://"), "table": n},
+}
+SERVER_OF = {"qdrant-server": "qdrant", "sql-postgres": "pgvector"}
+
+
+def _server_up(ttype):
+    from rag_lab.services import _reachable
+    return _reachable(services.url(SERVER_OF.get(ttype, ttype)))
+
+
+@pytest.mark.parametrize("ttype", ["local", "qdrant", "python", "sql",
+                                   *[pytest.param(t, marks=pytest.mark.skipif(not _server_up(t), reason=f"{t} not running"))
+                                     for t in SERVER_PARAMS]])
 def test_ingest_append_overwrite_and_benchmark(tmp_path, ttype):
-    ds = f"shop_{ttype}"
+    ds = f"shop_{ttype}".replace("-", "_")
     _questions(tmp_path, [{"question_id": "q1", "question": "leeds warehouse shipping", "expected_doc_ids": ["b.txt"], "gold_answer": "Leeds"}])
     _dataset(tmp_path, ds, {"a.txt": "Refunds\nrefunds are issued within fourteen days",
                             "b.txt": "Shipping\norders ship from the leeds warehouse"})
-    target = workspace.save_target({"name": f"T {ttype}", "type": ttype, "params": {}})
+    params = SERVER_PARAMS[ttype](f"raglab_test_{uuid.uuid4().hex[:8]}") if ttype in SERVER_PARAMS else {}
+    target = workspace.save_target({"name": f"T {ttype}", "type": ttype.split("-")[0], "params": params})
+    try:
+        _check_target(tmp_path, ds, target)
+    finally:
+        t = open_target(target)
+        t.clear()           # don't leave test tables / indexes in a shared server
+        t.close()
+
+
+def _check_target(tmp_path, ds, target):
     cfg = _ingest_cfg(ds, target["id"])
 
     assert _last_write(pipeline.run_ingest(cfg))["docs_written"] == 2
@@ -144,6 +170,10 @@ def test_ingest_append_overwrite_and_benchmark(tmp_path, ttype):
     hit = json.loads((run_dir / "retrieval.jsonl").read_text())["chunks"][0]
     assert hit["doc_id"] == "b.txt" and "leeds" in hit["text"]                 # chunk text travels with the hit
     assert json.loads((run_dir / "config.json").read_text())["target"]["version"] == 2
+    if open_target(target).text_search:
+        run_id = pipeline.run_benchmark({"name": "bench-kw", "target": {"id": target["id"]}, "retrieve": {"impl": "bm25", "top_k": 2},
+                                         "generate": {"impl": "none"}, "evaluate": {"impl": "standard", "judge": "auto"}})
+        assert json.loads((paths.RUNS / run_id / "metrics.json").read_text())["overall"]["recall@1"] == 100.0
 
     over = _last_write(pipeline.run_ingest({**cfg, "target": {"id": target["id"], "mode": "overwrite"}}))
     assert (over["docs_written"], over["docs_skipped"]) == (3, 0)

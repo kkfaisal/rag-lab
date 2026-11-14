@@ -6,10 +6,16 @@ import { isActive, useJobs } from '../components/Jobs'
 import ParamForm from '../components/ParamForm'
 import { Empty, ErrorNote, PageHead, Pill, Stat } from '../components/ui'
 
-const TYPE_LABEL: Record<string, string> = { local: 'Local store', qdrant: 'Qdrant', opensearch: 'OpenSearch', python: 'Python script' }
+const TYPE_LABEL: Record<string, string> = {
+  local: 'Local store', pgvector: 'PostgreSQL + pgvector', sql: 'SQL database', qdrant: 'Qdrant', opensearch: 'OpenSearch',
+  elasticsearch: 'Elasticsearch', python: 'Python script',
+}
 const TYPE_HINT: Record<string, string> = {
   local: 'Vectors + BM25 in a file on disk. No setup.', qdrant: 'Vector database: embedded on disk, or a server URL.',
-  opensearch: 'BM25 and k-NN on an OpenSearch cluster.', python: 'Your own store: write add / delete / search in Python.',
+  pgvector: 'Vectors (HNSW) and full-text search in Postgres.',
+  sql: 'Any SQLAlchemy database (Postgres, MySQL, SQL Server, Oracle, SQLite…): the Python counterpart of JDBC.',
+  opensearch: 'BM25 and k-NN on an OpenSearch cluster.', elasticsearch: 'BM25 and k-NN on Elasticsearch 9.',
+  python: 'Your own store: write add / delete / search in Python.',
 }
 const BLANK = { name: '', description: '', type: 'local', params: {}, version: 0, n_docs: 0, n_chunks: 0, dataset: null, subset: null, snapshot: null, embed: null, history: [] } as Target
 
@@ -20,10 +26,14 @@ export default function Targets() {
   const [targets, setTargets] = useState<Target[] | null>(null)
   const [edit, setEdit] = useState<Target>()
   const [error, setError] = useState<string>()
+  const [conn, setConn] = useState<null | 'testing' | { ok: boolean; message: string }>(null)
+  const [services, setServices] = useState<{ type: string; label: string; url: string; reachable: boolean }[]>()
   const jobs = useJobs()
   const busy = jobs.filter(isActive).length
   const reload = useCallback(() => get<Target[]>('/api/targets').then(setTargets).catch(e => setError(errText(e))), [])
   useEffect(() => { get<Catalog>('/api/catalog').then(setCatalog) }, [])
+  useEffect(() => { get<typeof services>('/api/services').then(setServices).catch(() => {}) }, [])
+  useEffect(() => { setConn(null) }, [edit?.id, edit?.type])
   useEffect(() => { reload() }, [reload, busy])
   useEffect(() => {
     if (id === 'new') setEdit(e => e && !e.id ? e : { ...BLANK })
@@ -51,6 +61,17 @@ export default function Targets() {
       </PageHead>
       <ErrorNote error={error} />
 
+      {services && !edit && (
+        <div className="services" title="Database services docker-compose can start (docker compose --profile search up -d)">
+          <span className="small muted" style={{ alignSelf: 'center' }}>Database services</span>
+          {services.map(s => (
+            <div key={s.type} className="service" title={s.url}>
+              <span className={`dot ${s.reachable ? 'on' : ''}`} />
+              <span className="small"><b>{s.label}</b> <span className="faint">{s.reachable ? 'running' : 'not running'}</span></span>
+              {s.reachable && <button className="sm ghost" onClick={() => { setEdit({ ...BLANK, type: s.type, name: s.label, params: s.type === 'qdrant' ? { url: s.url } : {} }); nav('/targets/new') }}>Add target</button>}
+            </div>))}
+        </div>)}
+
       {edit && catalog && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-head"><h2>{edit.id ? edit.name : 'New target'}</h2>
@@ -69,8 +90,14 @@ export default function Targets() {
             <div className="field"><label>Description</label><input value={edit.description} onChange={e => setEdit({ ...edit, description: e.target.value })} /></div>
           </div>
           <div className="section-title">{TYPE_LABEL[edit.type] ?? edit.type} settings</div>
-          {info && <ParamForm key={(edit.id ?? 'new') + edit.type} info={info} params={edit.params} onChange={p => setEdit({ ...edit, params: p })} />}
-          {edit.type === 'opensearch' && <div className="notice">Credentials are read from environment variables you name here (set them in <code>.env</code>), never stored in the target.</div>}
+          {info && <ParamForm key={(edit.id ?? 'new') + edit.type} info={info} params={edit.params} onChange={p => { setEdit({ ...edit, params: p }); setConn(null) }} scriptKind="target" />}
+          {['opensearch', 'elasticsearch', 'qdrant'].includes(edit.type) && <div className="notice">Credentials are read from environment variables you name here (set them in <code>.env</code>), never stored in the target.</div>}
+          {['pgvector', 'sql'].includes(edit.type) && <div className="notice">Write secrets in the URL as <code>{'${NAME}'}</code>, e.g. <code>{'postgresql://raglab:${POSTGRES_PASSWORD}@localhost:5433/raglab'}</code>. They are read from the environment (<code>.env</code>) when connecting, never stored in the target.</div>}
+          <div className="row conn-test">
+            <button className="sm" disabled={conn === 'testing'} onClick={() => { setConn('testing'); send<{ ok: boolean; message: string }>('POST', '/api/targets/test', { type: edit.type, params: edit.params }).then(setConn).catch(e => setConn({ ok: false, message: errText(e) })) }}>
+              {conn === 'testing' ? 'Testing…' : 'Test connection'}</button>
+            {conn && conn !== 'testing' && <span className={`small ${conn.ok ? 'ok-text' : 'bad-text'}`}>{conn.ok ? '✓ ' : '✕ '}{conn.message}</span>}
+          </div>
           {info?.source && edit.type !== 'python' && <details style={{ marginTop: 10 }}><summary className="small">Python source of this target type · {info.source_file}</summary>
             <CodeEditor value={info.source} readOnly height="260px" /></details>}
           <div className="row" style={{ marginTop: 12 }}><span className="grow" />

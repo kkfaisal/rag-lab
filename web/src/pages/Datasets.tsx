@@ -84,7 +84,7 @@ function DatasetForm({ catalog, existing, initial, onClose }: { catalog: Catalog
         {files && files.count > 0 && <details style={{ marginTop: 6 }}><summary className="small">{files.count} file(s) in the upload folder</summary>
           <pre>{files.files.map(f => `${f.path}  (${f.size.toLocaleString()} B)`).join('\n')}</pre></details>}
       </>}
-      {source === 'script' && <div style={{ marginTop: 10 }}><CodeEditor value={code} onChange={setCode} height="280px" /></div>}
+      {source === 'script' && <div style={{ marginTop: 10 }}><CodeEditor value={code} onChange={setCode} height="280px" kind="extract" /></div>}
 
       <div className="section-title">2 · Benchmark questions <span className="muted">required</span>
         {hasQuestions ? <Pill status="ok">{ds?.n_questions ? `${ds.n_questions} loaded` : source === 'script' ? 'from script' : source === 'enterprise_rag_bench' ? 'included' : 'file ready'}</Pill> : <Pill status="warn">missing</Pill>}</div>

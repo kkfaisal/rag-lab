@@ -8,17 +8,22 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "anthropic>=1.0",
     "duckdb>=1.1",
+    "elasticsearch>=9,<10",
     "fastapi>=0.115",
     "httpx>=0.27",
     "numpy>=1.26",
     "opensearch-py>=3.2.0",
+    "psycopg[binary]>=3.2",
     "pyarrow>=17",
     "pydantic>=2.7",
+    "pymysql>=1.1",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.33",
     "pyyaml>=6.0",
     "qdrant-client>=1.20.0",
     "sentence-transformers>=3.0",
+    "sqlalchemy>=2.0",
+    "torch>=2.4",
     "typer>=0.12",
     "uvicorn>=0.30",
 ]
@@ -35,3 +40,13 @@ packages = ["backend/rag_lab"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+# On Linux (the Docker image) install the CPU-only PyTorch build instead of the
+# multi-GB CUDA one. macOS wheels are CPU/Metal already and are unaffected.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

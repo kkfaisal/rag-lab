@@ -219,3 +219,34 @@ def load_functions(code: str, required: str, optional: tuple[str, ...] = (), ext
     if not callable(ns.get(required)):
         raise ScriptError(f"Script must define a function named `{required}`")
     return {name: ns[name] for name in (required, *optional) if callable(ns.get(name))}
+
+
+# ---------------------------------------------------------------- editor support
+
+# Every kind of script: its starting template and the functions rag-lab calls.
+CONTRACTS = {
+    "chunk": {"template": CHUNK_TEMPLATE, "required": ["chunk"], "optional": []},
+    "embed": {"template": EMBED_TEMPLATE, "required": ["embed"], "optional": ["embed_query"]},
+    "retrieve": {"template": RETRIEVE_TEMPLATE, "required": ["retrieve"], "optional": []},
+    "rerank": {"template": RERANK_TEMPLATE, "required": ["rerank"], "optional": []},
+    "extract": {"template": EXTRACT_TEMPLATE, "required": ["extract"], "optional": ["questions"]},
+    "target": {"template": TARGET_TEMPLATE, "required": ["clear", "delete_docs", "add", "search"], "optional": ["finish", "count"]},
+}
+
+
+def check(kind: str, code: str) -> dict:
+    """Static check for the editor: does it parse, and does it define the functions
+    rag-lab will call? The code is parsed, never executed (running it could load
+    models or touch your data)."""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return {"ok": False, "line": e.lineno, "message": f"SyntaxError: {e.msg} (line {e.lineno})"}
+    defined = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    contract = CONTRACTS.get(kind)
+    if contract:
+        missing = [f for f in contract["required"] if f not in defined]
+        if missing:
+            return {"ok": False, "line": None, "message": "Missing required function(s): " + ", ".join(f"`{f}`" for f in missing)}
+    return {"ok": True, "line": None, "message": "Parses, and defines " + ", ".join(f"`{f}`" for f in sorted(defined)) if defined else "Parses"}

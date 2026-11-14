@@ -254,6 +254,14 @@ def _write_target(run: _Run, target_def: dict, mode: str, dataset: str, subset: 
 
 # ----------------------------------------------------------------------------- benchmark
 
+def _target_code_hash(target_type: str) -> str:
+    import inspect
+    import sys
+    from .targets import TARGETS
+    src = inspect.getsource(sys.modules[TARGETS[target_type][0].__module__])
+    return hashlib.sha256(src.encode()).hexdigest()[:16]
+
+
 def run_benchmark(raw: dict, limit: int | None = None, meta: dict | None = None, on_start=None) -> str:
     """Config: {name, target: {id}, retrieve, rerank, generate, evaluate}. The
     questions are those of the dataset the target was last written from."""
@@ -264,7 +272,7 @@ def run_benchmark(raw: dict, limit: int | None = None, meta: dict | None = None,
         raise SystemExit(f"Target {target_def['name']!r} is empty. Run an ingestion pipeline that writes to it first.")
     dataset, subset, snapshot = manifest["dataset"], manifest["subset"], manifest["snapshot"]
     cfg["target"].update(name=target_def["name"], type=target_def["type"], version=manifest["version"],
-                         n_chunks=manifest["n_chunks"], embed=manifest["embed"])
+                         params=target_def.get("params") or {}, n_chunks=manifest["n_chunks"], embed=manifest["embed"])
     cfg["data"] = {"dataset": dataset, "subset": subset, "snapshot": snapshot}
 
     corpus = data.connect(read_only=True)
@@ -277,9 +285,10 @@ def run_benchmark(raw: dict, limit: int | None = None, meta: dict | None = None,
     run = _Run("benchmark", cfg, BENCH_STAGES, meta, on_start, dataset=dataset, snapshot=snapshot, subset=subset,
                limit=limit, n_questions=len(qids), question_ids=qids, target_version=manifest["version"])
     print(f"Run {run.id} (benchmark): {target_def['name']} v{manifest['version']} ({dataset}), {len(qids)} questions", flush=True)
-    # Cache keys start from the target's identity + version: a re-run on an unchanged target is free.
+    # Cache keys start from the target's identity + version, its settings and the source of its
+    # target type (search-time code): a re-run on an unchanged target is free.
     run.upstream = cache.stage_key("target", {"id": target_def["id"], "version": manifest["version"],
-                                              "params": target_def.get("params")}, None, "")
+                                              "params": target_def.get("params")}, None, _target_code_hash(target_def["type"]))
     target, error = open_target(target_def), None
     try:
         for stage in BENCH_STAGES:

@@ -5,6 +5,8 @@ A chunk is a dict: {"chunk_id", "doc_id", "source", "title", "text", "vector"}
 A hit is a dict: {"chunk_id", "doc_id", "score", "text"}.
 """
 
+import os
+import re
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -12,6 +14,23 @@ from pydantic import BaseModel
 
 class TargetError(Exception):
     pass
+
+
+def expand_env(value: str) -> str:
+    """Replace ${NAME} with the environment variable NAME, so connection URLs can
+    reference secrets kept in .env instead of storing them in the target."""
+    def sub(m):
+        if m.group(1) not in os.environ:
+            raise TargetError(f"Environment variable {m.group(1)} is not set (referenced as ${{{m.group(1)}}}). Add it to .env.")
+        return os.environ[m.group(1)]
+    return re.sub(r"\$\{(\w+)\}", sub, value)
+
+
+def safe_identifier(name: str) -> str:
+    """Table / index names are put into SQL, so only allow plain identifiers."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", name):
+        raise TargetError(f"{name!r} is not a valid table name (letters, digits and _ only)")
+    return name
 
 
 class Target:

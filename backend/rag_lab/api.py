@@ -214,7 +214,8 @@ def catalog():
                      "source_file": f"backend/rag_lab/targets/{cls.__module__.rsplit('.', 1)[-1]}.py"}
                     for name, (cls, cfg_cls) in TARGETS.items()]
     return {"stages": stages, "target_types": target_types, "kinds": workspace.KINDS, "sources": data.SOURCES,
-            "templates": {"extract": scripting.EXTRACT_TEMPLATE},
+            "templates": {k: c["template"] for k, c in scripting.CONTRACTS.items()},
+            "contracts": {k: {"required": c["required"], "optional": c["optional"]} for k, c in scripting.CONTRACTS.items()},
             "has_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")), "bench_ready": bench.is_ready()}
 
 
@@ -241,7 +242,59 @@ def _seed() -> None:
     workspace.seed(first["name"] if first else None, "dev" if first and "dev" in first["subsets"] else "all")
 
 
+# ----------------------------------------------------------------------------- code editor
+
+@app.get("/api/scripts/info")
+def scripts_info():
+    """What the code editor needs: each script kind's contract and template, and whether AI help is on."""
+    from . import assist
+    return {"contracts": scripting.CONTRACTS, "assist": assist.available(),
+            "assist_model": os.environ.get("RAG_LAB_ASSIST_MODEL", "claude-sonnet-5-5")}
+
+
+@app.post("/api/scripts/check")
+def check_script(body: dict = Body(...)):
+    """{"kind", "code"} -> {"ok", "message", "line"}. Parses only; nothing is executed."""
+    return scripting.check(body.get("kind", ""), body.get("code", ""))
+
+
+@app.post("/api/assist")
+def assist_code(body: dict = Body(...)):
+    """{"kind", "code", "instruction", "error"?} -> {"code", "explanation", "model", "cost_usd"}."""
+    from . import assist
+    if not assist.available():
+        raise HTTPException(400, "AI help needs ANTHROPIC_API_KEY in .env (then restart rag-lab).")
+    if not (body.get("instruction") or "").strip():
+        raise HTTPException(400, "Say what you want changed.")
+    try:
+        return assist.suggest(body.get("kind", ""), body.get("code", ""), body["instruction"], body.get("error"))
+    except Exception as e:
+        raise HTTPException(502, f"{type(e).__name__}: {e}")
+
+
 # ----------------------------------------------------------------------------- targets
+
+@app.get("/api/services")
+def service_status():
+    """Database services (docker-compose) and whether each is reachable right now."""
+    from . import services
+    return services.status()
+
+
+@app.post("/api/targets/test")
+def test_target(body: dict = Body(...)):
+    """Try to connect with unsaved settings: {"type", "params"} -> {"ok", "message"}."""
+    t = None
+    try:
+        t = open_target({"id": "_connection_test", "type": body["type"], "params": body.get("params") or {}})
+        n = t.count()
+        return {"ok": True, "message": f"Connected. {n:,} chunks stored." if n is not None else "Connected."}
+    except Exception as e:
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+    finally:
+        if t is not None:
+            t.close()
+        shutil.rmtree(paths.TARGETS / "_connection_test", ignore_errors=True)
 
 def _target_view(t: dict) -> dict:
     m = Manifest(paths.TARGETS / t["id"]).data

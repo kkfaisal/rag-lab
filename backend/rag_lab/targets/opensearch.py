@@ -3,16 +3,19 @@ Needs a reachable OpenSearch cluster (with the k-NN plugin for vectors)."""
 
 import os
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from .. import services
 
 from .base import Target, TargetError, register_target
 
 
 class OpenSearchConfig(BaseModel):
     model_config = {"extra": "forbid"}
-    url: str = "http://localhost:9200"
+    url: str = Field(default_factory=lambda: services.url("opensearch"))
     index: str = "rag_lab"
     vectors: bool = True                # also store vectors in a knn_vector field
+    candidates: int = 200               # k-NN search width: higher = closer to exact search, slower
     username_env: str | None = None     # names of environment variables holding the credentials
     password_env: str | None = None
     verify_certs: bool = True
@@ -84,7 +87,9 @@ class OpenSearchTarget(Target):
     def search_vector(self, vector, k, query=""):
         if not self.cfg.vectors:
             raise TargetError("This OpenSearch target was created with vectors=false")
-        return self._search({"knn": {"vec": {"vector": [float(x) for x in vector], "k": k}}}, k)
+        width = max(self.cfg.candidates, k)
+        q = {"vector": [float(x) for x in vector], "k": width, "method_parameters": {"ef_search": width}}
+        return self._search({"knn": {"vec": q}}, k)
 
     def count(self):
         return int(self.client().count(index=self.cfg.index)["count"]) if self._exists() else 0

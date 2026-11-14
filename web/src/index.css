@@ -249,3 +249,9 @@ a.flow-box:hover { text-decoration: none; background: var(--surface-2); }
 .flow-box.tone-score { border-left-color: var(--ok); }
 .how-links li { margin: 6px 0; }
 @media (max-width: 860px) { .flow-box { width: 100%; } .flow-cell { width: 100%; flex-direction: column; align-items: stretch; } .flow-arrow { transform: rotate(90deg); align-self: center; padding: 2px 0; } }
+
+/* ---- pipeline lists ---- */
+tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--surface-2); }
+.chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.chain-step { display: inline-flex; gap: 4px; align-items: center; }
+.chain .chip { font-size: 11.5px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); white-space: nowrap; }

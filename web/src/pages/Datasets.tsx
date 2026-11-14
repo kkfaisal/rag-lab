@@ -52,7 +52,6 @@ export default function Datasets() {
       </PageHead>
       {creating !== null && <NewDataset key={creating} existing={rows.map(r => r.name)} initial={creating || undefined}
         onClose={() => setCreating(null)} onDone={reload} />}
-      {jobs.some(j => j.kind === 'dataset') && <><div className="section-title">Recent dataset jobs</div><JobList jobs={jobs} kinds={['dataset']} limit={3} /></>}
       <ErrorNote error={error} />
 
       {loaded === null || folders === null ? <p className="muted">Loading…</p> : rows.length === 0 ? (
@@ -77,6 +76,7 @@ export default function Datasets() {
       <PublicDatasets loaded={(loaded ?? []).map(d => d.name)} downloaded={(folders ?? []).map(f => f.name)} working={working} busy={jobState}
         onGet={name => { setCreating(name); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onLoad={loadIntoStore} />
       <p className="small faint">Each dataset keeps its own license (EnterpriseRAG-Bench: MIT; BEIR sets: see their Hugging Face cards). From a terminal: <code>uv run python scripts/get_datasets.py --list</code>.</p>
+      {jobs.some(j => j.kind === 'dataset') && <><div className="section-title" style={{ marginTop: 22 }}>Recent dataset jobs <span className="muted">· <Link to="/jobs">all jobs</Link></span></div><JobList jobs={jobs} kinds={['dataset']} limit={5} /></>}
     </>
   )
 }

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { errText, fmt, get, send, type Catalog, type DatasetInfo, type Graph, type GraphKind, type GraphNode, type Job, type Target } from '../api'
 import GraphEditor from '../components/GraphEditor'
 import { isActive, JobList, useJobs } from '../components/Jobs'
-import { Empty, ErrorNote, PageHead } from '../components/ui'
+import { Empty, ErrorNote, PageHead, Pill } from '../components/ui'
 
 const TEXT = {
   ingestion: { title: 'Ingestion pipelines', path: '/ingestion', noun: 'ingestion pipeline', job: 'ingest',
@@ -46,11 +46,13 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
   }, [reload])
   useEffect(() => { get<Target[]>('/api/targets').then(setTargets).catch(() => undefined) }, [busy])
 
-  // Open the pipeline named in the URL (or the first one).
+  // Open the pipeline named in the URL; without one the page lists every pipeline.
   useEffect(() => {
-    if (id === 'new' || !graphs?.length) return
-    const g = graphs.find(x => x.id === id) ?? graphs[0]
-    if (g.id !== id) { nav(`${t.path}/${g.id}`, { replace: true }); return }
+    if (id === 'new') return
+    if (!id) { setGraph(undefined); return }
+    if (!graphs) return
+    const g = graphs.find(x => x.id === id)
+    if (!g) { nav(t.path, { replace: true }); return }
     setGraph(g); setSaved(strip(g)); setRunTargets(null); setNote(undefined)
   }, [id, graphs, nav, t.path])
 
@@ -90,10 +92,19 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
   }
 
   if (!catalog || graphs === null) return <p className="muted">Loading…</p>
+  if (!id) return (
+    <>
+      <PageHead title={t.title} sub={t.blurb}><button className="primary" onClick={create}>New pipeline</button></PageHead>
+      {datasets.filter(d => d.n_questions).length === 0 && <div className="notice warn" style={{ marginBottom: 12 }}>No dataset is ready yet. Create one on the <Link to="/datasets">Datasets</Link> page first.</div>}
+      <PipelineList kind={kind} graphs={graphs} jobs={jobs} targets={targets} onOpen={g => nav(`${t.path}/${g.id}`)} onCreate={create} />
+      <div className="section-title">Recent runs <span className="muted">· <Link to="/jobs">all jobs</Link></span></div>
+      <JobList jobs={jobs} kinds={[t.job]} limit={5} />
+    </>)
   const nTargets = graph?.nodes.filter(n => n.stage === 'target').length ?? 0
   return (
     <>
-      <PageHead title={t.title} sub={t.blurb}>
+      <PageHead title={graph?.name || t.title} sub={graph?.description || t.blurb}>
+        <button className="ghost" onClick={() => nav(t.path)}>All pipelines</button>
         <button onClick={create}>New pipeline</button>
       </PageHead>
       {datasets.filter(d => d.n_questions).length === 0 && <div className="notice warn" style={{ marginBottom: 12 }}>No dataset is ready yet. Create one on the <Link to="/datasets">Datasets</Link> page first.</div>}
@@ -133,6 +144,35 @@ export default function GraphPage({ kind }: { kind: GraphKind }) {
       </>}
     </>
   )
+}
+
+const STAGE_ORDER = ['source', 'transform', 'chunk', 'embed', 'target', 'retrieve', 'rerank', 'generate', 'benchmark']
+
+// Every pipeline of this kind, with what it does at a glance and how its last run went.
+function PipelineList({ kind, graphs, jobs, targets, onOpen, onCreate }: {
+  kind: GraphKind; graphs: Graph[]; jobs: Job[]; targets: Target[]; onOpen: (g: Graph) => void; onCreate: () => void
+}) {
+  if (graphs.length === 0) return <Empty>No {TEXT[kind].noun}s yet. <a href="#" onClick={e => { e.preventDefault(); onCreate() }}>Create one</a>.</Empty>
+  const targetName = (tid: unknown) => targets.find(tg => tg.id === tid)?.name ?? String(tid || '?')
+  const label = (n: GraphNode) => n.stage === 'source' ? String(n.params.dataset || 'no dataset') + (n.params.subset && n.params.subset !== 'all' ? ` · ${n.params.subset}` : '')
+    : n.stage === 'target' ? targetName(n.params.target_id) : n.stage === 'benchmark' ? `${n.params.limit ? `${n.params.limit} questions` : 'all questions'}` : n.impl
+  return (
+    <div className="table-wrap"><table>
+      <thead><tr><th>pipeline</th><th>{kind === 'ingestion' ? 'source → steps → targets' : 'target → steps'}</th><th>last run</th><th>updated</th></tr></thead>
+      <tbody>{graphs.map(g => {
+        const nodes = [...g.nodes].sort((a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage) || a.position.y - b.position.y)
+        const last = jobs.find(j => (j as Job & { spec?: { meta?: { pipeline_id?: string } } }).spec?.meta?.pipeline_id === g.id)
+        return (
+          <tr key={g.id} className="clickable" onClick={() => onOpen(g)}>
+            <td><Link to={`${TEXT[kind].path}/${g.id}`} onClick={e => e.stopPropagation()}><b>{g.name}</b></Link>
+              {g.description && <div className="small muted">{g.description}</div>}</td>
+            <td><div className="chain">{nodes.map((n, i) => <span key={n.id} className="chain-step">{i > 0 && <span className="faint">→</span>}
+              <span className="chip" title={`${n.stage}: ${n.impl}`}><span className="faint">{n.stage}</span> {label(n)}</span></span>)}</div></td>
+            <td className="small">{last ? <><Pill status={last.status} />
+              <div className="faint">{(last.finished_at ?? last.created_at).replace('T', ' ').slice(0, 16)}</div></> : <span className="faint">never run</span>}</td>
+            <td className="small faint">{g.updated_at ? g.updated_at.replace('T', ' ').slice(0, 16) : '–'}</td>
+          </tr>)})}</tbody>
+    </table></div>)
 }
 
 // Chunk a random real document with the node's current settings (saved or not).

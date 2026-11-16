@@ -1,7 +1,7 @@
-"""Draws docs/rag-lab-flow.svg, the README's "How it works" diagram.
+"""Draws docs/how-rag-lab-works.svg, the README's "How it works" diagram.
 
     python docs/make_flow_diagram.py
-    uv run --no-project --with playwright python docs/make_flow_diagram.py --png   # also docs/rag-lab-flow.png
+    uv run --no-project --with playwright python docs/make_flow_diagram.py --png   # also docs/how-rag-lab-works.png
 
 Layout: the data source on the left holds raw documents and the gold set (questions, gold documents,
 gold answers). Raw documents flow through the ingestion pipeline into a target; the retrieval
@@ -164,7 +164,7 @@ def svg():
 
 
 if __name__ == "__main__":
-    f = HERE / "rag-lab-flow.svg"
+    f = HERE / "how-rag-lab-works.svg"
     f.write_text(svg())
     print("wrote", f)
     if "--png" in sys.argv:
@@ -173,6 +173,6 @@ if __name__ == "__main__":
             br = pw.chromium.launch(channel="chrome")
             page = br.new_page(viewport={"width": W, "height": H}, device_scale_factor=2)
             page.set_content(f'<html><body style="margin:0;background:transparent">{svg()}</body></html>')
-            page.locator("svg").screenshot(path=str(HERE / "rag-lab-flow.png"), omit_background=True)
+            page.locator("svg").screenshot(path=str(HERE / "how-rag-lab-works.png"), omit_background=True)
             br.close()
-        print("wrote", HERE / "rag-lab-flow.png")
+        print("wrote", HERE / "how-rag-lab-works.png")

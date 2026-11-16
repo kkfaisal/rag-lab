@@ -27,7 +27,7 @@ you edit in the browser, so you can read, change and own every line.
 
 ## How it works
 
-![How rag-lab works: a dataset of raw documents, questions and gold documents and answers; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/rag-lab-flow.png)
+![How rag-lab works: a dataset of raw documents, questions and gold documents and answers; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/how-rag-lab-works.png)
 
 1. **Dataset.** Every benchmark dataset has three parts that belong together: the raw documents (the
    corpus to search), the questions, and the gold documents and gold answers for each question.

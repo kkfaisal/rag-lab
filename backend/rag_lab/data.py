@@ -19,6 +19,7 @@ Tables
 import hashlib
 import json
 import random
+import re
 import time
 from pathlib import Path
 
@@ -413,11 +414,15 @@ def build_subset(dataset: str = BENCH, name: str = "dev", per_category: int = 10
     who runs this gets the same subset."""
     if name == "all":
         raise SystemExit("'all' is reserved (it means every doc and question)")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+        raise SystemExit(f"Bad subset name {name!r}: letters, digits, _ and - only")
     rng = random.Random(seed)
     con = connect()
     snap = latest_snapshot(con, dataset)
     rows = con.execute("SELECT question_id, category, expected_doc_ids FROM questions WHERE dataset=? ORDER BY question_id",
                        [dataset]).fetchall()
+    if not rows:
+        raise SystemExit(f"Dataset {dataset!r} has no questions loaded, so there is nothing to build a subset from")
     by_cat: dict[str, list] = {}
     for r in rows:
         by_cat.setdefault(r[1], []).append(r)
@@ -442,6 +447,14 @@ def build_subset(dataset: str = BENCH, name: str = "dev", per_category: int = 10
         print(f"  WARNING: {len(missing)} gold docs not in the dataset (did you download all slices?)")
 
 
+def remove_subset(dataset: str, name: str) -> None:
+    con = connect()
+    con.execute("DELETE FROM subset_docs WHERE dataset=? AND subset=?", [dataset, name])
+    con.execute("DELETE FROM subset_questions WHERE dataset=? AND subset=?", [dataset, name])
+    con.close()
+    print(f"Removed subset '{name}' of '{dataset}'")
+
+
 def dataset_info(con) -> list[dict]:
     out = []
     cols = {r[0] for r in con.execute("DESCRIBE datasets").fetchall()}
@@ -453,9 +466,10 @@ def dataset_info(con) -> list[dict]:
         by_source = con.execute(f"SELECT source, count(*) FROM ({docs_sql('v.source')}) GROUP BY 1 ORDER BY 2 DESC",
                                 {"ds": name, "snap": latest, "subset": "all"}).fetchall()
         subsets = con.execute("SELECT subset, count(*) FROM subset_questions WHERE dataset=? GROUP BY 1", [name]).fetchall()
+        subset_docs = con.execute("SELECT subset, count(*) FROM subset_docs WHERE dataset=? GROUP BY 1", [name]).fetchall()
         n_q = con.execute("SELECT count(*) FROM questions WHERE dataset=?", [name]).fetchone()[0]
         out.append({"name": name, "adapter": adapter, "code": code, "created_at": str(created), "latest_snapshot": latest,
-                    "n_questions": n_q, "by_source": dict(by_source), "subsets": dict(subsets),
+                    "n_questions": n_q, "by_source": dict(by_source), "subsets": dict(subsets), "subset_docs": dict(subset_docs),
                     "snapshots": [dict(zip(["snapshot", "created_at", "added", "changed", "deleted", "n_docs", "note"],
                                            [*s[:1], str(s[1]), *s[2:]])) for s in snaps]})
     return out

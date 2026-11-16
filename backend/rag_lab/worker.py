@@ -1,7 +1,7 @@
 """Runs one background job (see jobs.py): python -m rag_lab.worker <job.json>
 
 Job kinds:
-  dataset    fill and/or load a dataset folder into the document store (or remove a dataset)
+  dataset    fill and/or load a dataset folder into the document store, build or remove a subset, or remove a dataset
   ingest     run an ingestion pipeline path and write to its target
   benchmark  run a retrieval pipeline against a target and score it
 """
@@ -25,6 +25,11 @@ def main(job_file: str) -> None:
         from . import data
         if spec.get("action") == "remove":
             data.remove_dataset(spec["dataset"])
+        elif spec.get("action") == "subset":
+            p = spec["params"]
+            data.build_subset(spec["dataset"], p["name"], int(p.get("per_category", 10)), int(p.get("distractors", 20_000)), int(p.get("seed", 42)))
+        elif spec.get("action") == "remove_subset":
+            data.remove_subset(spec["dataset"], spec["params"]["name"])
         else:
             data.ingest_source(spec["dataset"], spec["source"], spec.get("params") or {}, sync=spec.get("sync", False))
     elif job["kind"] == "ingest":

@@ -303,3 +303,18 @@ th .term-tip { right: 0; left: auto; }
 .script-versions label { margin: 0; }
 .script-versions select { max-width: 220px; font-size: 12px; padding: 2px 6px; }
 .warn-text { color: var(--warn); }
+
+/* run history of a pipeline: one row per run, its steps as chips; a step's log below the canvas */
+tr.selected td { background: var(--accent-soft, var(--surface-2)); }
+tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.step-chip { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px;
+  font-size: 11.5px; font-weight: 500; background: var(--surface); color: var(--text-2); cursor: pointer; min-height: 0; line-height: 1.6; }
+.step-chip:disabled { cursor: default; opacity: 0.6; }
+.step-chip.done, .step-chip.cached { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); background: var(--ok-soft); }
+.step-chip.failed { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); font-weight: 600; }
+.step-chip.running { color: var(--info); border-color: var(--info); background: var(--info-soft); }
+.step-chip:not(:disabled):hover { filter: brightness(0.96); text-decoration: underline; }
+.run-error { margin-top: 4px; max-width: 70ch; overflow-wrap: anywhere; }
+.step-log { margin: 12px 0; padding: 10px 12px; }
+.step-log.failed { border-left: 3px solid var(--bad); }
+.step-log pre { max-height: 360px; margin-bottom: 0; }

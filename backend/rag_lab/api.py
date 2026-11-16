@@ -7,6 +7,7 @@ builds, experiments) is queued as a background job (jobs.py).
 import inspect
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -130,6 +131,26 @@ def get_run(run_id: str):
         "git_diff": (d / "git.diff").read_text() if (d / "git.diff").exists() else None,
         "error": (d / "error.txt").read_text() if (d / "error.txt").exists() else None,
     }
+
+
+def _clean_log(text: str, max_chars: int = 40000) -> str:
+    """Progress bars rewrite their line with \r: keep only each line's final state."""
+    lines = [ln.rstrip("\r").rsplit("\r", 1)[-1] for ln in text.split("\n")]
+    return "\n".join(ln for ln in lines if ln.strip())[-max_chars:]
+
+
+@app.get("/api/runs/{run_id}/log")
+def run_log(run_id: str, step: str | None = None):
+    """The log of one step of a run (logs/<step>.log), or the list of steps that have a log.
+    Runs from before step logs existed have none: the UI then shows the job's whole log."""
+    d = _run_dir(run_id) / "logs"
+    steps = sorted(f.stem for f in d.glob("*.log")) if d.is_dir() else []
+    if step is None:
+        return {"steps": steps}
+    if step not in steps:
+        raise HTTPException(404, f"no log for step {step!r} in run {run_id}")
+    with open(d / f"{step}.log", errors="replace", newline="") as f:      # newline="": keep \r, so progress bars collapse
+        return {"step": step, "log": _clean_log(f.read())}
 
 
 @app.get("/api/runs/{run_id}/questions")
@@ -430,8 +451,39 @@ def get_job(job_id: str):
     job["log"] = jobs.log_tail(job_id)
     if job.get("run_id"):
         d = paths.RUNS / job["run_id"]
-        job["run"] = {"current_stage": (_json(d / "run.json") or {}).get("current_stage"), "stages": _json(d / "stages.json", [])}
+        info = _json(d / "run.json") or {}
+        job["run"] = {"current_stage": info.get("current_stage"), "failed_stage": info.get("failed_stage"), "stages": _json(d / "stages.json", [])}
     return job
+
+
+@app.get("/api/graphs/{kind}/{graph_id}/history")
+def graph_history(kind: str, graph_id: str, limit: int = 30):
+    """Every run of one pipeline, newest first: the job (status, error) plus its run's steps,
+    so the UI can draw each past run on the pipeline's nodes."""
+    job_kind = {"ingestion": "ingest", "retrieval": "benchmark"}.get(kind)
+    if not job_kind:
+        raise HTTPException(404, f"unknown pipeline kind {kind!r}")
+    out = []
+    for f in sorted(paths.JOBS.glob("*.json"), key=lambda f: f.name, reverse=True):
+        job = jobs.get(f.stem)
+        if job["kind"] != job_kind or (job.get("spec") or {}).get("meta", {}).get("pipeline_id") != graph_id:
+            continue
+        job["spec"] = {"meta": job["spec"].get("meta", {})}          # the full config is not needed here
+        if job.get("run_id"):
+            info = _json(paths.RUNS / job["run_id"] / "run.json") or {}
+            job["run"] = {"current_stage": info.get("current_stage"), "failed_stage": info.get("failed_stage"),
+                          "stages": _json(paths.RUNS / job["run_id"] / "stages.json", [])}
+        out.append(job)
+        if len(out) >= limit:
+            break
+    return out
+
+
+@app.get("/api/jobs/{job_id}/log")
+def job_log(job_id: str):
+    if not (paths.JOBS / f"{job_id}.json").exists():
+        raise HTTPException(404, "job not found")
+    return {"log": jobs.log_tail(job_id, 40000)}
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -636,6 +688,30 @@ def remove_dataset(name: str):
     """Queue removal of a dataset from the document store. Its folder is kept."""
     _dataset_dir(name)
     return jobs.submit("dataset", f"Remove dataset {name}", {"dataset": name, "action": "remove"})
+
+
+@app.post("/api/datasets/{name}/subsets")
+def create_subset(name: str, body: dict = Body(...)):
+    """Queue building a subset: {"name", "per_category"?, "distractors"?, "seed"?}: per_category questions
+    from each question category (or in total, without categories), their gold documents, and
+    `distractors` random other documents. A subset with the same name is replaced."""
+    sub = str(body.get("name", ""))
+    if sub == "all" or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sub):
+        raise HTTPException(400, "subset name: letters, digits, _ and - only, and not 'all'")
+    try:
+        params = {"name": sub, **{k: int(body[k]) for k in ("per_category", "distractors", "seed") if body.get(k) is not None}}
+    except (TypeError, ValueError):
+        raise HTTPException(400, "per_category, distractors and seed must be whole numbers")
+    if params.get("per_category", 10) < 1 or params.get("distractors", 0) < 0:
+        raise HTTPException(400, "per_category must be at least 1 and distractors at least 0")
+    return jobs.submit("dataset", f"Build subset {sub}: {name}", {"dataset": name, "action": "subset", "params": params})
+
+
+@app.delete("/api/datasets/{name}/subsets/{subset}")
+def delete_subset(name: str, subset: str):
+    if subset == "all":
+        raise HTTPException(400, "'all' is not a stored subset")
+    return jobs.submit("dataset", f"Remove subset {subset}: {name}", {"dataset": name, "action": "remove_subset", "params": {"name": subset}})
 
 
 @app.get("/api/datasets/{name}/docs")

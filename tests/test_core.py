@@ -396,3 +396,42 @@ def test_run_ids_are_readable():
     from datetime import datetime
     rid = pipeline.run_id("x", {"pipeline_name": "Hybrid + rerank", "target_name": "Local store"}, datetime(2026, 11, 14, 18, 47))
     assert rid == "hybrid-rerank_local-store_2026_11_14_sat_18_47"
+
+
+def test_each_step_has_its_own_log_and_a_failure_names_its_step(tmp_path):
+    _questions(tmp_path, [{"question_id": "q1", "question": "where do orders ship from", "expected_doc_ids": ["b.txt"]}])
+    _dataset(tmp_path, "logs", {"a.txt": "Refunds\nrefunds within fourteen days", "b.txt": "Shipping\norders ship from leeds"})
+    target = workspace.save_target({"name": "T logs", "type": "local", "params": {"vectors": False}})
+    ok = paths.RUNS / pipeline.run_ingest(_ingest_cfg("logs", target["id"], embed=False))
+    assert {"setup", "load", "chunk", "write"} <= {f.stem for f in (ok / "logs").glob("*.log")}
+    assert "[chunk" in (ok / "logs" / "chunk.log").read_text()
+
+    rerank = "def rerank(question, chunks, top_n):\n    print('reranking now')\n    raise ValueError('broken reranker')\n"
+    with pytest.raises(Exception, match="broken reranker"):
+        pipeline.run_benchmark({"name": "bad", "target": {"id": target["id"]}, "retrieve": {"impl": "bm25", "top_k": 2},
+                                "rerank": {"impl": "python", "code": rerank, "top_n": 2},
+                                "generate": {"impl": "none"}, "evaluate": {"impl": "standard", "judge": False}})
+    bad = max((d for d in paths.RUNS.iterdir() if d.name.startswith("bad")), key=lambda d: d.stat().st_mtime)
+    info = json.loads((bad / "run.json").read_text())
+    assert (info["status"], info["failed_stage"]) == ("failed", "rerank")
+    log = (bad / "logs" / "rerank.log").read_text()
+    assert "reranking now" in log and "ValueError: broken reranker" in log    # its output and the traceback
+    assert "broken reranker" not in (bad / "logs" / "retrieve.log").read_text()
+
+
+def test_build_and_remove_subset(tmp_path):
+    _questions(tmp_path, [{"question_id": f"q{i}", "question": f"q {i}", "expected_doc_ids": [f"d{i}.txt"]} for i in range(5)])
+    _dataset(tmp_path, "sub", {f"d{i}.txt": f"Doc {i}\ntext {i}" for i in range(8)})
+    data.build_subset("sub", "small", per_category=2, distractors=1)       # no categories: 2 questions in total
+    con = data.connect(read_only=True)
+    info = next(d for d in data.dataset_info(con) if d["name"] == "sub")
+    qids = data.subset_question_ids(con, "sub", "small")
+    con.close()
+    assert info["subsets"] == {"small": 2} and info["subset_docs"] == {"small": 3}     # 2 gold + 1 distractor
+    assert len(qids) == 2
+    with pytest.raises(SystemExit, match="letters, digits"):
+        data.build_subset("sub", "bad name")
+    data.remove_subset("sub", "small")
+    con = data.connect(read_only=True)
+    assert next(d for d in data.dataset_info(con) if d["name"] == "sub")["subsets"] == {}
+    con.close()

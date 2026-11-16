@@ -76,7 +76,8 @@ export interface DatasetInfo {
   latest_snapshot: number
   n_questions: number
   by_source: Record<string, number>
-  subsets: Record<string, number>
+  subsets: Record<string, number>          // subset -> questions
+  subset_docs?: Record<string, number>     // subset -> documents
   snapshots: { snapshot: number; created_at: string; added: number; changed: number; deleted: number; n_docs: number; note: string }[]
   folder?: FolderSummary
 }
@@ -139,7 +140,7 @@ export interface Job {
   id: string; kind: 'dataset' | 'ingest' | 'benchmark'; title: string; status: 'queued' | 'running' | 'ok' | 'failed' | 'cancelled'
   created_at: string; started_at?: string; finished_at?: string; run_id?: string; error?: string; log?: string
   spec: { meta?: Record<string, string>; dataset?: string }
-  run?: { current_stage: string | null; stages: (StageLog & { stats?: Record<string, unknown> })[] }
+  run?: { current_stage: string | null; failed_stage?: string | null; stages: (StageLog & { stats?: Record<string, unknown> })[] }
 }
 
 export interface MatrixCell { run_id: string; target_id: string; target: string; pipeline_id: string; pipeline: string; dataset: string; target_version: number; n_questions: number; judged: unknown; overall: Metrics; cost_usd: number; created_at: string }

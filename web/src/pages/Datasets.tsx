@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { bytes, errText, get, send, type DatasetInfo, type DatasetMetrics, type FolderSummary } from '../api'
@@ -177,7 +177,7 @@ function NewDataset({ existing, initial, onClose, onDone }: { existing: string[]
   )
 }
 
-type Tab = 'overview' | 'files' | 'questions' | 'snapshots' | 'extractor'
+type Tab = 'overview' | 'files' | 'questions' | 'subsets' | 'snapshots' | 'extractor'
 
 function DatasetPage({ row, onChange, jobs }: { row: Row; onChange: () => void; jobs: ReturnType<typeof useJobs> }) {
   const nav = useNavigate()
@@ -193,7 +193,7 @@ function DatasetPage({ row, onChange, jobs }: { row: Row; onChange: () => void; 
     if (window.confirm(`Remove “${name}” from the internal document store? Its folder and downloaded files are kept, so you can load it again.`))
       act(send('DELETE', `/api/datasets/${name}`), 'Removal queued')
   }
-  const tabs: [Tab, string][] = [['overview', 'Overview'], ['files', 'Files'], ['questions', 'Questions'], ['snapshots', 'Snapshots'],
+  const tabs: [Tab, string][] = [['overview', 'Overview'], ['files', 'Files'], ['questions', 'Questions'], ['subsets', 'Subsets'], ['snapshots', 'Snapshots'],
     ...(folder?.has_extractor ? [['extractor', 'Extractor'] as [Tab, string]] : [])]
 
   return (
@@ -220,6 +220,7 @@ function DatasetPage({ row, onChange, jobs }: { row: Row; onChange: () => void; 
       {tab === 'overview' && (loaded ? <Overview name={name} info={loaded} folder={folder} /> : <Empty>Downloaded, not loaded. Check the files, then press <b>Load into store</b> to read them into rag-lab’s internal document store, which pipelines use. The folder needs documents and a <code>questions.jsonl</code> ({QUESTION_FORMAT}).</Empty>)}
       {tab === 'files' && <Explorer name={name} onChange={onChange} />}
       {tab === 'questions' && (loaded ? <Questions name={name} /> : <Empty>Load the dataset into the store to browse its questions.</Empty>)}
+      {tab === 'subsets' && (loaded ? <Subsets name={name} info={loaded} busy={running} onChange={onChange} /> : <Empty>Load the dataset into the store to make subsets of it.</Empty>)}
       {tab === 'snapshots' && (loaded ? <Snapshots info={loaded} /> : <Empty>No snapshots yet.</Empty>)}
       {tab === 'extractor' && <Extractor name={name} onRun={() => { setMsg('Extractor queued'); onChange() }} />}
     </>
@@ -277,7 +278,7 @@ function Overview({ name, info, folder }: { name: string; info: DatasetInfo; fol
               <tbody>{Object.entries(folder.by_ext).map(([k, v]) => <tr key={k}><td><code>{k}</code></td><td className="num">{v.files.toLocaleString()}</td><td className="num">{bytes(v.size)}</td></tr>)}</tbody></table></div></>}
         </div>
       </div>
-      {Object.keys(info.subsets).length > 0 && <p className="small muted">Subsets: {Object.entries(info.subsets).map(([k, v]) => `${k} (${v} questions)`).join(', ')}</p>}
+      {Object.keys(info.subsets).length > 0 && <p className="small muted">Subsets: {Object.entries(info.subsets).map(([k, v]) => `${k} (${v} questions)`).join(', ')}. See the Subsets tab.</p>}
     </>
   )
 }
@@ -362,6 +363,66 @@ function Questions({ name }: { name: string }) {
       <tbody>{qs.map(q => <tr key={q.question_id}><td className="small mono">{q.question_id}</td><td className="small">{q.category}</td><td>{q.question}</td>
         <td className="num">{q.n_gold_docs}</td><td className="small muted">{q.gold_answer ? q.gold_answer.slice(0, 160) : '–'}</td></tr>)}</tbody>
     </table>{qs.length === 200 && <p className="small faint" style={{ padding: '0 12px' }}>First 200 shown.</p>}</div>)
+}
+
+// A subset = some questions + their gold documents + random other documents ("distractors"),
+// for quick, cheap runs. Pick one in a pipeline's Source node. Built as a dataset job.
+function Subsets({ name, info, busy, onChange }: { name: string; info: DatasetInfo; busy: boolean; onChange: () => void }) {
+  const [m, setM] = useState<DatasetMetrics>()
+  const [form, setForm] = useState({ name: '', per_category: 10, distractors: 2000, seed: 42 })
+  const [error, setError] = useState<string>()
+  const [msg, setMsg] = useState<string>()
+  useEffect(() => { get<DatasetMetrics>(`/api/datasets/${name}/metrics`).then(setM).catch(() => undefined) }, [name, info.latest_snapshot])
+  const cats = m ? m.categories.length : 0
+  const byCat = cats > 1
+  const nQ = byCat ? m!.categories.reduce((a, c) => a + Math.min(c.questions, form.per_category), 0) : Math.min(form.per_category, info.n_questions)
+  const nDocs = docCount(info)
+  const taken = form.name in info.subsets
+  const valid = NAME_RE.test(form.name) && form.name !== 'all' && form.per_category >= 1 && form.distractors >= 0
+  const act = (p: Promise<unknown>, text: string) => p.then(() => { setError(undefined); setMsg(text); onChange() }).catch(e => setError(errText(e)))
+  const create = () => {
+    if (taken && !window.confirm(`Replace the existing subset “${form.name}”?`)) return
+    act(send('POST', `/api/datasets/${name}/subsets`, form), `Building subset “${form.name}”…`)
+  }
+  const remove = (s: string) => window.confirm(`Delete subset “${s}”? Documents and questions stay in the dataset; pipelines that use this subset will fail until you pick another.`)
+    && act(send('DELETE', `/api/datasets/${name}/subsets/${s}`), `Removing subset “${s}”…`)
+  const num = (k: 'per_category' | 'distractors' | 'seed') => (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+  return (
+    <>
+      <div className="table-wrap" style={{ marginBottom: 14 }}><table>
+        <thead><tr><th>subset</th><th className="num">questions</th><th className="num">documents</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>all</b> <span className="small muted">built in: every question and document</span></td><td className="num">{info.n_questions.toLocaleString()}</td><td className="num">{nDocs.toLocaleString()}</td><td></td></tr>
+          {Object.entries(info.subsets).sort().map(([s, q]) => (
+            <tr key={s}><td><b>{s}</b></td><td className="num">{q.toLocaleString()}</td><td className="num">{info.subset_docs?.[s]?.toLocaleString() ?? '–'}</td>
+              <td className="num"><button className="sm ghost danger" disabled={busy} onClick={() => remove(s)}>Delete</button></td></tr>))}
+        </tbody></table></div>
+
+      <div className="card">
+        <div className="section-title" style={{ marginTop: 0 }}>New subset</div>
+        <p className="small muted" style={{ marginTop: 0 }}>Picks questions at random{byCat ? ' from each question category' : ''}, adds every gold document they need,
+          then adds random other documents so search still has to find the right ones among many. The same seed always gives the same subset.
+          Use it from a pipeline’s <b>Source</b> node (Subset).</p>
+        <div className="row" style={{ gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="field"><label>Name</label>
+            <input value={form.name} placeholder="dev_small" style={{ width: 150 }} onChange={e => setForm({ ...form, name: e.target.value.trim() })} /></div>
+          <div className="field"><label>{byCat ? `Questions per category (${cats} categories)` : 'Questions'}</label>
+            <input type="number" min={1} value={form.per_category} style={{ width: 110 }} onChange={num('per_category')} /></div>
+          <div className="field"><label>Other documents (distractors)</label>
+            <input type="number" min={0} step={1000} value={form.distractors} style={{ width: 130 }} onChange={num('distractors')} /></div>
+          <div className="field"><label>Seed</label>
+            <input type="number" value={form.seed} style={{ width: 80 }} onChange={num('seed')} /></div>
+          <span className="grow" />
+          <button className="primary" disabled={!valid || busy} onClick={create}>{busy ? 'Working…' : taken ? 'Rebuild subset' : 'Create subset'}</button>
+        </div>
+        <p className="small muted" style={{ marginBottom: 0 }}>
+          {form.name && !NAME_RE.test(form.name) ? <span className="bad-text">Name: letters, digits, _ and - only. </span> : form.name === 'all' ? <span className="bad-text">“all” is built in. </span> : null}
+          About <b>{nQ.toLocaleString()}</b> questions and up to <b>{Math.min(nDocs, form.distractors).toLocaleString()}</b> other documents, plus the questions’ gold documents.
+          {taken ? ' A subset with this name exists and will be replaced.' : ''}</p>
+        {msg && <p className="small muted">{msg}</p>}
+        <ErrorNote error={error} />
+      </div>
+    </>)
 }
 
 function Snapshots({ info }: { info: DatasetInfo }) {

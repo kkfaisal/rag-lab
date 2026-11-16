@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import time
 import traceback
 from datetime import datetime
@@ -83,6 +84,49 @@ def run_id(name: str, meta: dict | None = None, now: datetime | None = None) -> 
     return f"{who}_{now:%Y_%m_%d}_{day}_{now:%H_%M}"
 
 
+class _StepLogs:
+    """Copies everything a run prints into runs/<id>/logs/<step>.log, one file per step
+    ("setup" before the first step), so the UI can show the log of the node that failed."""
+
+    def __init__(self, folder):
+        self.folder, self.fh = folder, None
+        self.folder.mkdir(exist_ok=True)
+        self.switch("setup")
+        self.saved = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _Tee(sys.stdout, self), _Tee(sys.stderr, self)
+
+    def switch(self, step: str) -> None:
+        if self.fh:
+            self.fh.close()
+        self.fh = open(self.folder / f"{step}.log", "a")
+
+    def write(self, text: str) -> None:
+        if self.fh:
+            self.fh.write(text)
+            self.fh.flush()
+
+    def close(self) -> None:
+        if sys.stdout is not self.saved[0]:
+            sys.stdout, sys.stderr = self.saved
+        if self.fh:
+            self.fh.close()
+            self.fh = None
+
+
+class _Tee:
+    """A stream that also writes to the current step's log."""
+
+    def __init__(self, stream, logs: _StepLogs):
+        self.stream, self.logs = stream, logs
+
+    def write(self, text):
+        self.logs.write(text)
+        return self.stream.write(text)
+
+    def __getattr__(self, name):        # flush, isatty, fileno, encoding, ... of the real stream
+        return getattr(self.stream, name)
+
+
 class _Run:
     """Bookkeeping shared by both run kinds: the run folder, progress files, cached stages."""
 
@@ -105,11 +149,14 @@ class _Run:
         self.dirs: dict = {}
         self.metas: dict = {}
         self.upstream: str | None = None
+        self.logs = _StepLogs(self.dir / "logs")
         self.save(None)
         if on_start:
             on_start(self.id)
 
     def save(self, current: str | None) -> None:
+        if current and current != self.info.get("current_stage"):
+            self.logs.switch(current)
         self.info["current_stage"] = current
         self.info["duration_s"] = round(time.time() - self.started, 2)
         (self.dir / "stages.json").write_text(json.dumps(self.log, indent=2))
@@ -157,11 +204,15 @@ class _Run:
         self.info["status"] = "failed" if error else "ok"
         if error:
             self.info["error"] = f"{type(error).__name__}: {error}"
-            (self.dir / "error.txt").write_text("".join(traceback.format_exception(error)))
+            self.info["failed_stage"] = self.info.get("current_stage") or "setup"
+            trace = "".join(traceback.format_exception(error))
+            (self.dir / "error.txt").write_text(trace)
+            self.logs.write(trace)          # the traceback ends the failed step's log
         if usage is not None:
             self.info["cost_usd"] = usage["cost_usd_incurred"]
             (self.dir / "usage.json").write_text(json.dumps(usage, indent=2))
         self.save(None)
+        self.logs.close()
         tracking.index_run(self.dir)
         print(f"{'Failed' if error else 'Done'} in {self.info['duration_s']}s -> runs/{self.id}", flush=True)
 

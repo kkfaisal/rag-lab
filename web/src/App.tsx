@@ -6,6 +6,7 @@ import Datasets from './pages/Datasets'
 import Diff from './pages/Diff'
 import GraphPage from './pages/GraphPage'
 import HowItWorks from './pages/HowItWorks'
+import Lessons from './pages/Lessons'
 import Heatmap from './pages/Heatmap'
 import QuestionPage from './pages/QuestionPage'
 import Results from './pages/Results'
@@ -26,6 +27,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="logo"><span className="logo-mark">R</span>rag-lab</div>
         {item('/how-it-works', Icon.help, 'How it works')}
+        {item('/lessons', Icon.learn, 'Lessons')}
         <div className="nav-group">Define</div>
         {item('/datasets', Icon.data, 'Datasets')}
         {item('/targets', Icon.target, 'Targets')}
@@ -46,6 +48,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/datasets" replace />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/lessons" element={<Lessons />} />
           <Route path="/datasets" element={<Datasets />} />
           <Route path="/datasets/:name" element={<Datasets />} />
           <Route path="/targets/:id?" element={<Targets />} />

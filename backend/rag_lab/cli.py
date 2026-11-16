@@ -26,6 +26,21 @@ def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
     uvicorn.run("rag_lab.api:app", host=host, port=port, reload=reload)
 
 
+@app.command()
+def quickstart(serve_ui: bool = typer.Option(False, "--serve", help="Then start the web UI"), port: int = 8000):
+    """First result in minutes, no API key: SciFact → BM25 index → 300 questions scored. Then open Lessons."""
+    from . import quickstart as qs
+    qs.run()
+    ui = qs.build_ui()
+    if not ui:
+        return
+    typer.echo(f"\nNext: open http://127.0.0.1:{port}/lessons and work through the lessons, starting with lesson 2.")
+    if serve_ui:
+        serve(port=port)
+    else:
+        typer.echo("Start the UI with: uv run rag-lab serve")
+
+
 @data_app.command("add")
 def data_add(dataset: str = typer.Argument(..., help="Dataset name = its folder under data/datasets/"),
              source: str = typer.Option("folder", help="folder | extract | enterprise_rag_bench"),

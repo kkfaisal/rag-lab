@@ -8,6 +8,8 @@
 >
 > **rag-lab is the answer: a hands-on lab where every step of RAG is visible, editable and scored.**
 
+![rag-lab in 30 seconds: lessons, datasets, the pipeline canvas, the script editor, a failed step's log, the results matrix, comparing two runs and a single question](docs/demo.gif)
+
 rag-lab is an open-source learning tool and playground for Retrieval-Augmented Generation. Load a
 real benchmark, build ingestion and retrieval pipelines on a node canvas, run them, and see exactly
 which questions each change fixed or broke, with a significance test that tells you whether the
@@ -24,6 +26,47 @@ you edit in the browser, so you can read, change and own every line.
 - How the same pipeline behaves on different vector stores: local, pgvector, Qdrant, OpenSearch,
   Elasticsearch, any SQL database.
 - How to debug a pipeline: every run keeps each step's status, timing and log.
+
+## Try it in two minutes
+
+No API key needed. You need [uv](https://docs.astral.sh/uv/) and Node 20+.
+
+```bash
+git clone https://github.com/kkfaisal/rag-lab.git && cd rag-lab
+uv sync
+uv run rag-lab quickstart --serve
+```
+
+The quickstart downloads SciFact (4 MB: 5,000 scientific abstracts and 300 questions with gold
+documents), builds a BM25 index, answers all 300 questions and prints your first scores, about 15
+seconds after the download. It builds the web UI the first time, then starts it at
+http://127.0.0.1:8000. Open **Lessons** and carry on from there.
+
+With Docker instead, run the quickstart before starting the server (both use the same document store):
+
+```bash
+docker compose run --rm rag-lab rag-lab quickstart
+docker compose up -d
+```
+
+## Lessons
+
+Nine small experiments, each with a goal score that rag-lab checks against your runs. The goals were
+measured on SciFact, so each is reachable, but only with the lesson's idea.
+
+| # | Lesson | You learn | Goal |
+|---|---|---|---|
+| 1 | Your First Benchmark | what gold documents and recall@k are | recall@10 ≥ 80 |
+| 2 | Search by Meaning: Vector Search | what embeddings find, and what they miss | recall@10 ≥ 82 with vectors |
+| 3 | Is It Real or Noise? | reading the paired significance test | self-check |
+| 4 | Best of Both: Hybrid Search | fusing BM25 and vectors with RRF | recall@10 ≥ 84 with hybrid |
+| 5 | Does Reranking Help Here? | measuring a reranker (it hurts on SciFact) | self-check |
+| 6 | Write Your Own Retriever | that every node is just Python | recall@10 ≥ 84 with your script |
+| 7 | Chunking Changes Everything | chunk size versus precision and context | self-check |
+| 8 | Let Claude Answer | answers with citations and an LLM judge | correctness ≥ 60 (API key) |
+| 9 | Agentic RAG | when an agent that searches again is worth it | correctness ≥ 80 (API key) |
+
+![Lessons](docs/screenshots/00-lessons.png)
 
 ## How it works
 
@@ -577,8 +620,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and worked examples.
 - **More rerankers and embedders.** Hosted embedding and rerank APIs as built-in nodes, alongside the
   local models.
 - **Query transformation nodes.** Query rewriting, HyDE and multi-query expansion before retrieval.
-- **Guided lessons.** Step-by-step exercises inside the app ("make recall@10 beat 85 on SciFact"),
-  with hints that point at the node to change.
+- **More lessons.** Structure-aware chunking, query rewriting, metadata filters, and GraphRAG once
+  the graph target lands.
 - **Cost and latency views.** Quality against cost and latency per pipeline, to pick the cheapest
   pipeline that is good enough.
 - **More evaluation.** Faithfulness / groundedness checks and human-labelled spot checks.

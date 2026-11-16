@@ -116,6 +116,13 @@ def _runs(kind: str) -> list[dict]:
     return rows
 
 
+@app.get("/api/lessons")
+def list_lessons():
+    """The guided lessons, each with its best matching run and whether its goal is met."""
+    from . import lessons
+    return lessons.with_status()
+
+
 @app.get("/api/runs")
 def list_runs():
     return _runs("benchmark")

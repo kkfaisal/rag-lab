@@ -435,3 +435,18 @@ def test_build_and_remove_subset(tmp_path):
     con = data.connect(read_only=True)
     assert next(d for d in data.dataset_info(con) if d["name"] == "sub")["subsets"] == {}
     con.close()
+
+
+# ---- quickstart and lessons
+
+def test_quickstart_runs_offline_on_a_loaded_scifact_and_lessons_see_the_run(tmp_path):
+    from rag_lab import lessons, quickstart
+    _questions(tmp_path, [{"question_id": f"q{i}", "question": f"topic {i} facts", "expected_doc_ids": [f"d{i}.txt"]} for i in range(3)])
+    _dataset(tmp_path, "scifact", {f"d{i}.txt": f"Doc {i}\nfacts about topic {i}" for i in range(3)})
+    run_id = quickstart.run()                         # dataset already loaded: no download
+    overall = json.loads((paths.RUNS / run_id / "metrics.json").read_text())["overall"]
+    assert overall["n"] == 3 and overall["recall@10"] == 100.0
+    first = next(x for x in lessons.with_status() if x["id"] == "first-benchmark")
+    assert first["status"]["tried"] == 0              # 3 questions: below the lesson's 300-question bar
+    assert lessons._matches({"retrieve.impl": "hybrid"}, {"retrieve.impl": "hybrid", "rerank.impl": "none"})
+    assert not lessons._matches({"retrieve.impl": "hybrid", "rerank.impl": "cross_encoder"}, {"rerank.impl": "none"})

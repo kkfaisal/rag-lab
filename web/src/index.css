@@ -318,3 +318,24 @@ tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .step-log { margin: 12px 0; padding: 10px 12px; }
 .step-log.failed { border-left: 3px solid var(--bad); }
 .step-log pre { max-height: 360px; margin-bottom: 0; }
+
+/* Lessons */
+.lesson-progress { margin-left: auto; color: var(--text-2); font-size: 13px; }
+.lesson-progress b { color: var(--text); font-size: 16px; }
+.lesson { max-width: 980px; }
+.lesson.passed { border-color: var(--ok); }
+.lesson-head { display: flex; gap: 14px; align-items: flex-start; }
+.lesson-head h2 { font-size: 17px; margin: 0; }
+.lesson-n { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--accent); color: var(--on-accent); }
+.lesson.passed .lesson-n { background: var(--ok); }
+.lesson-level { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); font-weight: 600; }
+.lesson-goal { margin-left: auto; text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.goal-text { font-size: 12.5px; color: var(--text-2); display: flex; gap: 6px; align-items: center; }
+.lesson-learn, .lesson-needs, .lesson-takeaway { margin: 12px 0 0; }
+.lesson-needs { color: var(--warn); }
+.lesson-steps { margin: 10px 0 0; padding-left: 22px; line-height: 1.6; }
+.lesson-steps li + li { margin-top: 4px; }
+.lesson-hints { margin-top: 10px; }
+.lesson-hints summary { cursor: pointer; color: var(--accent); font-weight: 550; }
+.lesson-takeaway { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); }
+@media (max-width: 700px) { .lesson-head { flex-wrap: wrap; } .lesson-goal { margin-left: 0; text-align: left; align-items: flex-start; } }

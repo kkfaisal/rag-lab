@@ -27,31 +27,7 @@ you edit in the browser, so you can read, change and own every line.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    subgraph D["1 · Data"]
-        A["Public benchmark or your own files<br/>(extractor script)"] --> B[("Document store<br/>docs + questions,<br/>versioned snapshots")]
-        B --> S["Subsets<br/>(dev, small …)"]
-    end
-    subgraph I["2 · Ingestion pipeline"]
-        SRC[source] --> TR["transform<br/>(optional)"] --> CH[chunk] --> EM["embed<br/>(optional)"] --> TG
-    end
-    subgraph T["3 · Targets"]
-        TG[("local · pgvector · Qdrant ·<br/>OpenSearch · Elasticsearch ·<br/>SQL · your script")]
-    end
-    subgraph R["4 · Retrieval pipeline"]
-        RT["retrieve<br/>BM25 / vector / hybrid"] --> RR[rerank] --> GE["generate<br/>Claude: single pass or agent"] --> BE[benchmark]
-    end
-    subgraph E["5 · Evaluate & learn"]
-        RES["Results matrix<br/>target × pipeline"] --> CMP["Compare two runs<br/>fixed / broken questions,<br/>significance test"] --> Q["Per question:<br/>gold vs retrieved, answer, judge"]
-    end
-    B --> SRC
-    S --> SRC
-    TG --> RT
-    BE --> RES
-    Q -. "change one node, run again" .-> I
-    Q -. "change one node, run again" .-> R
-```
+![How a RAG experiment flows in rag-lab: data, ingestion pipeline, targets, retrieval pipeline, evaluate and learn](docs/rag-lab-flow.png)
 
 Every step is cached by its settings and code, so changing one node re-runs only that node and what
 follows it. Every run records its full config (scripts included), dataset snapshot, target version,

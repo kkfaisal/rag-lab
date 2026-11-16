@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1670" height="735" viewBox="0 0 1670 735" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs><marker id="a-0" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/></marker><marker id="a-1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker><marker id="a-2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#059669"/></marker><marker id="a-3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d97706"/></marker><marker id="a-4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#db2777"/></marker><marker id="a-g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker></defs>
+<rect width="1670" height="735" rx="20" fill="#ffffff"/>
+<text x="30" y="54" font-size="26" font-weight="750" fill="#0f172a" text-anchor="start">rag-lab · how a RAG experiment flows</text>
+<text x="1640" y="54" font-size="15" font-weight="400" fill="#64748b" text-anchor="end">every node: a built-in with settings, or Python you edit in the browser</text>
+<rect x="30" y="96" width="290" height="516" rx="16" fill="#f5f3ff" stroke="#7c3aed" stroke-opacity=".35" stroke-width="1.5"/>
+<circle cx="62" cy="130" r="15" fill="#7c3aed"/>
+<text x="62" y="135.5" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+<text x="86" y="136" font-size="18" font-weight="700" fill="#7c3aed" text-anchor="start">Data</text>
+<rect x="48" y="166.0" width="254" height="114.66666666666667" rx="10" fill="#fff" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="175.0" y="220.33333333333334" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Benchmark or your files</text>
+<text x="175.0" y="240.33333333333334" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">extractor script you can read</text>
+<line x1="175.0" y1="284.6666666666667" x2="175.0" y2="314.6666666666667" stroke="#7c3aed" stroke-width="2" marker-end="url(#a-0)"/>
+<rect x="48" y="320.6666666666667" width="254" height="114.66666666666667" rx="10" fill="#fff" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="175.0" y="375.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Document store</text>
+<text x="175.0" y="395.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">docs + questions, versioned</text>
+<line x1="175.0" y1="439.33333333333337" x2="175.0" y2="469.33333333333337" stroke="#7c3aed" stroke-width="2" marker-end="url(#a-0)"/>
+<rect x="48" y="475.33333333333337" width="254" height="114.66666666666667" rx="10" fill="#fff" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="175.0" y="529.6666666666667" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Subsets</text>
+<text x="175.0" y="549.6666666666667" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">dev, small: iterate fast</text>
+<rect x="360" y="96" width="290" height="516" rx="16" fill="#eff6ff" stroke="#2563eb" stroke-opacity=".35" stroke-width="1.5"/>
+<circle cx="392" cy="130" r="15" fill="#2563eb"/>
+<text x="392" y="135.5" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">2</text>
+<text x="416" y="136" font-size="18" font-weight="700" fill="#2563eb" text-anchor="start">Ingestion pipeline</text>
+<rect x="378" y="166.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="505.0" y="201.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">source</text>
+<text x="505.0" y="221.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">dataset · subset · snapshot</text>
+<line x1="505.0" y1="246.0" x2="505.0" y2="276.0" stroke="#2563eb" stroke-width="2" marker-end="url(#a-1)"/>
+<rect x="378" y="282.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="505.0" y="317.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">transform</text>
+<text x="505.0" y="337.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">optional: clean, filter</text>
+<line x1="505.0" y1="362.0" x2="505.0" y2="392.0" stroke="#2563eb" stroke-width="2" marker-end="url(#a-1)"/>
+<rect x="378" y="398.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="505.0" y="433.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">chunk</text>
+<text x="505.0" y="453.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">fixed, Slack-aware, or a script</text>
+<line x1="505.0" y1="478.0" x2="505.0" y2="508.0" stroke="#2563eb" stroke-width="2" marker-end="url(#a-1)"/>
+<rect x="378" y="514.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="505.0" y="549.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">embed</text>
+<text x="505.0" y="569.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">optional: local model or a script</text>
+<rect x="690" y="96" width="290" height="516" rx="16" fill="#ecfdf5" stroke="#059669" stroke-opacity=".35" stroke-width="1.5"/>
+<circle cx="722" cy="130" r="15" fill="#059669"/>
+<text x="722" y="135.5" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+<text x="746" y="136" font-size="18" font-weight="700" fill="#059669" text-anchor="start">Targets</text>
+<rect x="708" y="166.0" width="254" height="60.666666666666664" rx="10" fill="#fff" stroke="#059669" stroke-width="1.5"/>
+<text x="835.0" y="193.33333333333334" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Local store</text>
+<text x="835.0" y="213.33333333333334" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">BM25 + exact vectors</text>
+<rect x="708" y="238.66666666666666" width="254" height="60.666666666666664" rx="10" fill="#fff" stroke="#059669" stroke-width="1.5"/>
+<text x="835.0" y="274.5" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">PostgreSQL + pgvector</text>
+<rect x="708" y="311.3333333333333" width="254" height="60.666666666666664" rx="10" fill="#fff" stroke="#059669" stroke-width="1.5"/>
+<text x="835.0" y="347.16666666666663" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Qdrant</text>
+<rect x="708" y="384.0" width="254" height="60.666666666666664" rx="10" fill="#fff" stroke="#059669" stroke-width="1.5"/>
+<text x="835.0" y="419.8333333333333" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">OpenSearch</text>
+<rect x="708" y="456.66666666666663" width="254" height="60.666666666666664" rx="10" fill="#fff" stroke="#059669" stroke-width="1.5"/>
+<text x="835.0" y="492.49999999999994" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Elasticsearch</text>
+<rect x="708" y="529.3333333333333" width="254" height="60.666666666666664" rx="10" fill="#fff" stroke="#059669" stroke-width="1.5"/>
+<text x="835.0" y="556.6666666666666" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Any SQL database</text>
+<text x="835.0" y="576.6666666666666" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">or your own Python script</text>
+<rect x="1020" y="96" width="290" height="516" rx="16" fill="#fffbeb" stroke="#d97706" stroke-opacity=".35" stroke-width="1.5"/>
+<circle cx="1052" cy="130" r="15" fill="#d97706"/>
+<text x="1052" y="135.5" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">4</text>
+<text x="1076" y="136" font-size="18" font-weight="700" fill="#d97706" text-anchor="start">Retrieval pipeline</text>
+<rect x="1038" y="166.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+<text x="1165.0" y="201.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">retrieve</text>
+<text x="1165.0" y="221.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">BM25 · vector · hybrid</text>
+<line x1="1165.0" y1="246.0" x2="1165.0" y2="276.0" stroke="#d97706" stroke-width="2" marker-end="url(#a-3)"/>
+<rect x="1038" y="282.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+<text x="1165.0" y="317.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">rerank</text>
+<text x="1165.0" y="337.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">cross-encoder</text>
+<line x1="1165.0" y1="362.0" x2="1165.0" y2="392.0" stroke="#d97706" stroke-width="2" marker-end="url(#a-3)"/>
+<rect x="1038" y="398.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+<text x="1165.0" y="433.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">generate</text>
+<text x="1165.0" y="453.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">Claude: single pass or agent</text>
+<line x1="1165.0" y1="478.0" x2="1165.0" y2="508.0" stroke="#d97706" stroke-width="2" marker-end="url(#a-3)"/>
+<rect x="1038" y="514.0" width="254" height="76.0" rx="10" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+<text x="1165.0" y="549.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">benchmark</text>
+<text x="1165.0" y="569.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">recall, nDCG, MRR, judge</text>
+<rect x="1350" y="96" width="290" height="516" rx="16" fill="#fdf2f8" stroke="#db2777" stroke-opacity=".35" stroke-width="1.5"/>
+<circle cx="1382" cy="130" r="15" fill="#db2777"/>
+<text x="1382" y="135.5" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">5</text>
+<text x="1406" y="136" font-size="18" font-weight="700" fill="#db2777" text-anchor="start">Evaluate &amp; learn</text>
+<rect x="1368" y="166.0" width="254" height="114.66666666666667" rx="10" fill="#fff" stroke="#db2777" stroke-width="1.5"/>
+<text x="1495.0" y="220.33333333333334" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Results matrix</text>
+<text x="1495.0" y="240.33333333333334" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">every target × pipeline</text>
+<line x1="1495.0" y1="284.6666666666667" x2="1495.0" y2="314.6666666666667" stroke="#db2777" stroke-width="2" marker-end="url(#a-4)"/>
+<rect x="1368" y="320.6666666666667" width="254" height="114.66666666666667" rx="10" fill="#fff" stroke="#db2777" stroke-width="1.5"/>
+<text x="1495.0" y="375.0" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">Compare two runs</text>
+<text x="1495.0" y="395.0" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">fixed / broken, is it noise?</text>
+<line x1="1495.0" y1="439.33333333333337" x2="1495.0" y2="469.33333333333337" stroke="#db2777" stroke-width="2" marker-end="url(#a-4)"/>
+<rect x="1368" y="475.33333333333337" width="254" height="114.66666666666667" rx="10" fill="#fff" stroke="#db2777" stroke-width="1.5"/>
+<text x="1495.0" y="529.6666666666667" font-size="16" font-weight="650" fill="#0f172a" text-anchor="middle">One question</text>
+<text x="1495.0" y="549.6666666666667" font-size="13" font-weight="400" fill="#64748b" text-anchor="middle">gold vs retrieved, answer</text>
+<line x1="323" y1="374.0" x2="357" y2="374.0" stroke="#475569" stroke-width="2.5" marker-end="url(#a-g)"/>
+<line x1="653" y1="374.0" x2="687" y2="374.0" stroke="#475569" stroke-width="2.5" marker-end="url(#a-g)"/>
+<line x1="983" y1="374.0" x2="1017" y2="374.0" stroke="#475569" stroke-width="2.5" marker-end="url(#a-g)"/>
+<line x1="1313" y1="374.0" x2="1347" y2="374.0" stroke="#475569" stroke-width="2.5" marker-end="url(#a-g)"/>
+<path d="M1495.0,616 V660 H505.0 V620" fill="none" stroke="#475569" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#a-g)"/>
+<path d="M1165.0,660 V620" fill="none" stroke="#475569" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#a-g)"/>
+<rect x="585.0" y="642" width="500" height="36" rx="18" fill="#0f172a"/>
+<text x="835.0" y="665.5" font-size="15" font-weight="600" fill="#fff" text-anchor="middle">change one node, run again: only what changed re-runs</text>
+<text x="835.0" y="707" font-size="15" font-weight="400" fill="#64748b" text-anchor="middle">Every run keeps its full config, scripts, dataset snapshot, target version, per-step logs and timings, tokens and cost.</text>
+</svg>

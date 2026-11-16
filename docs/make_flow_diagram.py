@@ -82,19 +82,20 @@ def svg():
 
     # 1 · data source: raw documents + the gold set
     lx, lw = LEFT[0], LEFT[1] - LEFT[0]
-    o += panel(lx, R1[0], lw, R3[1] - R1[0], DATA, 1, "Data Source")
-    o += box(lx + 20, 160, lw - 40, 110, DATA, "Raw Documents", ["A public benchmark", "or your own files"])
-    o += [f'<rect x="{lx + 12}" y="{R2[0] + 6}" width="{lw - 24}" height="{R3[1] - R2[0] - 18}" rx="14" fill="{TINT[GOLD]}" stroke="{GOLD}" stroke-width="1.6" stroke-dasharray="8 6"/>',
-          text(lx + lw / 2, R2[0] + 36, "Gold Set: The Answer Key", 16, 700, GOLD)]
-    o += box(lx + 26, 445, lw - 52, 115, GOLD, "Questions", ["What users would ask"])
-    o += box(lx + 26, 685, lw - 52, 125, GOLD, "Gold Documents", ["+ Gold Answers", "What a perfect system", "finds and says"])
+    o += panel(lx, R1[0], lw, R3[1] - R1[0], DATA, 1, "Dataset")
+    o.append(text(lx + lw / 2, R1[0] + 64, "Every benchmark has all three parts", 14, 600, DATA))
+    o += box(lx + 20, 178, lw - 40, 100, DATA, "Raw Documents", ["The corpus to search"])
+    o += box(lx + 20, 445, lw - 40, 115, DATA, "Questions", ["What users would ask"])
+    o += box(lx + 20, 685, lw - 40, 125, DATA, "Gold Documents", ["+ Gold Answers", "What a perfect system", "finds and says"], fill=TINT[GOLD])
+    for cy in (362, 622):                            # the parts belong together: raw + questions + gold
+        o += [f'<circle cx="{lx + lw / 2}" cy="{cy}" r="17" fill="{DATA}"/>', text(lx + lw / 2, cy + 8, "+", 24, 700, "#fff")]
 
     # 2 · ingestion pipeline → 3 · target
     ing_w = 4 * NODE_W + 3 * NODE_GAP + 2 * PAD
     o += panel(MAIN, R1[0], ing_w, R1[1] - R1[0], ING, 2, "Ingestion Pipeline")
     o += chain(160, 110, ING, [("Source", "Dataset or subset"), ("Transform", "Optional: clean, filter"),
                                ("Chunk", "Fixed or Slack-aware"), ("Embed", "Optional: vectors")])
-    o += arrow([(LEFT[1] - 18, 215), (MAIN - 5, 215)], DATA)
+    o += arrow([(LEFT[1] - 18, 228), (MAIN - 5, 228)], DATA)
     tx, tw = MAIN + ing_w + 48, RIGHT - (MAIN + ing_w + 48)
     o += arrow([(MAIN + ing_w + 3, 215), (tx - 5, 215)], ING)
     top, bot = R1[0] + 22, R1[1]
@@ -129,7 +130,7 @@ def svg():
 
     # each question joins its retrieved results at the end of block 4, on the way to the comparison
     jx, jy = MAIN + ret_w - 140, 620
-    o += [f'<path d="M{LEFT[1] - 26},502 H360 V{jy} H{jx}" fill="none" stroke="{GOLD}" stroke-width="2.4"/>',
+    o += [f'<path d="M{LEFT[1] - 20},502 H360 V{jy} H{jx}" fill="none" stroke="{GOLD}" stroke-width="2.4"/>',
           f'<path d="M{qx + 120},{R2[1] + 3} V{jy} H{jx}" fill="none" stroke="{RET}" stroke-width="2.4"/>',
           f'<circle cx="{jx}" cy="{jy}" r="5" fill="{LINE}"/>']
     o += arrow([(jx, jy), (jx, R3[0] - 5)], LINE)
@@ -145,7 +146,7 @@ def svg():
               text(MAIN + PAD + 172, y + 31, "vs", 15, 400, MUTED, "start"),
               text(MAIN + PAD + 198, y + 31, b, 16, 700, GOLD, "start"),
               text(MAIN + ret_w - PAD - 16, y + 31, "→  " + m, 15, 600, CMP, "end")]
-    o += arrow([(LEFT[1] - 14, 747), (MAIN - 5, 747)], GOLD)
+    o += arrow([(LEFT[1] - 18, 747), (MAIN - 5, 747)], GOLD)
     o += arrow([(MAIN + ret_w + 3, 745), (qx - 5, 745)], CMP)
     o += panel(qx, R3[0], RIGHT - qx, R3[1] - R3[0], BENCH, 6, "Benchmark")
     for k, (a, b) in enumerate([("Scores", "for every run and every question"),

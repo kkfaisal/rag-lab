@@ -27,10 +27,10 @@ you edit in the browser, so you can read, change and own every line.
 
 ## How it works
 
-![How rag-lab works: a data source with raw documents and a gold set; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/rag-lab-flow.png)
+![How rag-lab works: a dataset of raw documents, questions and gold documents and answers; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/rag-lab-flow.png)
 
-1. **Data source.** Every dataset has two parts: the raw documents, and a gold set of questions with
-   their gold documents and, where available, gold answers.
+1. **Dataset.** Every benchmark dataset has three parts that belong together: the raw documents (the
+   corpus to search), the questions, and the gold documents and gold answers for each question.
 2. **Ingestion pipeline.** The raw documents are transformed, chunked and optionally embedded...
 3. **...into a target**, the index that retrieval searches: local, pgvector, Qdrant, OpenSearch,
    Elasticsearch, any SQL database or your own script.

@@ -165,7 +165,7 @@ def _server_up(ttype):
     return _reachable(services.url(SERVER_OF.get(ttype, ttype)))
 
 
-@pytest.mark.parametrize("ttype", ["local", "qdrant", "python", "sql",
+@pytest.mark.parametrize("ttype", ["local", "graph", "qdrant", "python", "sql",
                                    *[pytest.param(t, marks=pytest.mark.skipif(not _server_up(t), reason=f"{t} not running"))
                                      for t in SERVER_PARAMS]])
 def test_ingest_append_overwrite_and_benchmark(tmp_path, ttype):
@@ -450,3 +450,20 @@ def test_quickstart_runs_offline_on_a_loaded_scifact_and_lessons_see_the_run(tmp
     assert first["status"]["tried"] == 0              # 3 questions: below the lesson's 300-question bar
     assert lessons._matches({"retrieve.impl": "hybrid"}, {"retrieve.impl": "hybrid", "rerank.impl": "none"})
     assert not lessons._matches({"retrieve.impl": "hybrid", "rerank.impl": "cross_encoder"}, {"rerank.impl": "none"})
+
+
+def test_graph_target_follows_related_terms(tmp_path):
+    _questions(tmp_path, [{"question_id": "q1", "question": "insulin", "expected_doc_ids": ["a.txt"]}])
+    _dataset(tmp_path, "gr", {"a.txt": "Insulin\ninsulin resistance raises glucose",
+                              "b.txt": "Glucose\nglucose uptake in muscle", "c.txt": "Weather\nsunny afternoon"})
+    target = workspace.save_target({"name": "T graph terms", "type": "graph",
+                                    "params": {"vectors": False, "min_df": 1, "max_df": 1.0, "min_cooccurrence": 1, "neighbours": 10}})
+    pipeline.run_ingest(_ingest_cfg("gr", target["id"], embed=False))
+    t = open_target(target)
+    hits = [h["doc_id"] for h in t.search_graph("insulin", 5)]
+    assert hits[0] == "a.txt" and "b.txt" in hits and "c.txt" not in hits     # b shares no word, but a related term
+    t.close()
+    base = {"name": "gr", "target": {"id": target["id"]}, "generate": {"impl": "none"}, "evaluate": {"impl": "standard", "judge": False}}
+    for retrieve in [{"impl": "graph", "top_k": 2}, {"impl": "hybrid", "vector_weight": 0, "graph_weight": 1, "top_k": 2}]:
+        run_dir = paths.RUNS / pipeline.run_benchmark({**base, "retrieve": retrieve})
+        assert json.loads((run_dir / "metrics.json").read_text())["overall"]["recall@1"] == 100.0

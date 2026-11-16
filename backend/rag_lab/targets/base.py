@@ -39,6 +39,7 @@ class Target:
     the target only has to add, delete by document, and search."""
     text_search = False       # can answer search_text (keyword / BM25)
     vector_search = False     # can answer search_vector
+    graph_search = False      # can answer search_graph (a knowledge graph over the chunks)
 
     def __init__(self, cfg: BaseModel, state_dir: Path):
         self.cfg, self.state_dir = cfg, state_dir
@@ -60,6 +61,9 @@ class Target:
 
     def search_vector(self, vector, k: int, query: str = "") -> list[dict]:
         raise TargetError(f"{type(self).__name__} does not support vector search")
+
+    def search_graph(self, query: str, k: int) -> list[dict]:
+        raise TargetError(f"{type(self).__name__} has no knowledge graph. Use a graph target.")
 
     def count(self) -> int | None:
         return None

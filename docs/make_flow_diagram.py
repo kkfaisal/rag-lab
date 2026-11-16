@@ -1,7 +1,7 @@
-"""Draws docs/how-rag-lab-works.svg, the README's "How it works" diagram.
+"""Draws docs/rag-lab-overview.svg, the README's "How it works" diagram.
 
     python docs/make_flow_diagram.py
-    uv run --no-project --with playwright python docs/make_flow_diagram.py --png   # also docs/how-rag-lab-works.png
+    uv run --no-project --with playwright python docs/make_flow_diagram.py --png   # also docs/rag-lab-overview.png
 
 Layout: the data source on the left holds raw documents and the gold set (questions, gold documents,
 gold answers). Raw documents flow through the ingestion pipeline into a target; the retrieval
@@ -103,10 +103,10 @@ def svg():
           f'<ellipse cx="{tx + tw / 2}" cy="{top}" rx="{tw / 2}" ry="18" fill="#fff" stroke="{TGT}" stroke-width="1.8"/>',
           f'<circle cx="{tx + 30}" cy="{top + 50}" r="14" fill="{TGT}"/>', text(tx + 30, top + 55.5, "3", 15, 700, "#fff"),
           text(tx + 52, top + 56.5, "Target (The Index)", 19, 700, TGT, "start"),
-          text(tx + tw / 2, top + 94, "Chunks, Vectors, BM25", 14.5, 600, INK),
-          text(tx + tw / 2, top + 122, "Local · pgvector · Qdrant", 14.5, 400, MUTED),
-          text(tx + tw / 2, top + 144, "OpenSearch · Elasticsearch", 14.5, 400, MUTED),
-          text(tx + tw / 2, top + 166, "Any SQL DB · Your script", 14.5, 400, MUTED)]
+          text(tx + tw / 2, top + 94, "Chunks, Vectors, BM25, Graph", 14.5, 600, INK),
+          text(tx + tw / 2, top + 122, "Local · Knowledge graph", 14.5, 400, MUTED),
+          text(tx + tw / 2, top + 144, "pgvector · Qdrant · OpenSearch", 14.5, 400, MUTED),
+          text(tx + tw / 2, top + 166, "Elasticsearch · SQL · Script", 14.5, 400, MUTED)]
 
     # 4 · retrieval pipeline (try it with any query in the search box)
     ret_w = 3 * NODE_W + 2 * NODE_GAP + 2 * PAD
@@ -164,7 +164,7 @@ def svg():
 
 
 if __name__ == "__main__":
-    f = HERE / "how-rag-lab-works.svg"
+    f = HERE / "rag-lab-overview.svg"
     f.write_text(svg())
     print("wrote", f)
     if "--png" in sys.argv:
@@ -173,6 +173,6 @@ if __name__ == "__main__":
             br = pw.chromium.launch(channel="chrome")
             page = br.new_page(viewport={"width": W, "height": H}, device_scale_factor=2)
             page.set_content(f'<html><body style="margin:0;background:transparent">{svg()}</body></html>')
-            page.locator("svg").screenshot(path=str(HERE / "how-rag-lab-works.png"), omit_background=True)
+            page.locator("svg").screenshot(path=str(HERE / "rag-lab-overview.png"), omit_background=True)
             br.close()
-        print("wrote", HERE / "how-rag-lab-works.png")
+        print("wrote", HERE / "rag-lab-overview.png")

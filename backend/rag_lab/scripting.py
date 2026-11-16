@@ -42,7 +42,8 @@ RETRIEVE_TEMPLATE = '''def retrieve(question, search, top_k):
     """Return ranked chunks for one question: a list of {"chunk_id", "doc_id", "score"}.
 
     search.bm25(query, k) and search.vector(query, k) query the index and return
-    such lists (each hit also has "text"). Combine, rewrite, filter as you like.
+    such lists (each hit also has "text"); on a graph target, search.graph(query, k) too.
+    Combine, rewrite, filter as you like.
     """
     hits = search.vector(question, top_k)
     return hits
@@ -209,15 +210,16 @@ def equivalent_script(stage: str, impl: str, params: dict) -> dict | None:
         code = (f"import html\nimport re\n\n{head}DROP = re.compile(DROP_LINES_MATCHING) if DROP_LINES_MATCHING else None\n"
                 f"TAG = re.compile({transform.TAG.pattern!r}, re.S | re.I)\n\n\n{body.rstrip()}\n")
         return {"code": code}
-    if stage == "retrieve" and impl in ("bm25", "vector", "hybrid"):
+    if stage == "retrieve" and impl in ("bm25", "vector", "graph", "hybrid"):
         from .stages import retrieve
         k = p.get("top_k", 20)
         if impl == "hybrid":
             code = (f"CANDIDATES = {p.get('candidates', 100)}\nRRF_K = {p.get('rrf_k', 60)}\n"
-                    f"BM25_WEIGHT = {p.get('bm25_weight', 1.0)}\nVECTOR_WEIGHT = {p.get('vector_weight', 1.0)}\n\n\n"
+                    f"BM25_WEIGHT = {p.get('bm25_weight', 1.0)}\nVECTOR_WEIGHT = {p.get('vector_weight', 1.0)}\n"
+                    f"GRAPH_WEIGHT = {p.get('graph_weight', 0.0)}\n\n\n"
                     f"{inspect.getsource(retrieve.rrf)}\n\ndef retrieve(question, search, top_k):\n"
-                    "    lexical = search.bm25(question, CANDIDATES)\n    dense = search.vector(question, CANDIDATES)\n"
-                    "    return rrf([(BM25_WEIGHT, lexical), (VECTOR_WEIGHT, dense)], RRF_K, top_k)\n")
+                    "    searches = [(BM25_WEIGHT, search.bm25), (VECTOR_WEIGHT, search.vector), (GRAPH_WEIGHT, search.graph)]\n"
+                    "    return rrf([(w, s(question, CANDIDATES)) for w, s in searches if w > 0], RRF_K, top_k)\n")
         else:
             code = f"def retrieve(question, search, top_k):\n    return search.{impl}(question, top_k)\n"
         return {"code": code, "top_k": k}

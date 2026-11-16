@@ -23,6 +23,7 @@ you edit in the browser, so you can read, change and own every line.
 - How to read RAG metrics: recall@k, nDCG, MRR, context recall, answer correctness.
 - How to tell a real improvement from noise (paired permutation test, bootstrap intervals).
 - How single-pass RAG compares with agentic RAG that searches again on its own.
+- How GraphRAG works: a knowledge graph of the corpus, graph search, and when a graph helps.
 - How the same pipeline behaves on different vector stores: local, pgvector, Qdrant, OpenSearch,
   Elasticsearch, any SQL database.
 - How to debug a pipeline: every run keeps each step's status, timing and log.
@@ -51,7 +52,7 @@ docker compose up -d
 
 ## Lessons
 
-Nine small experiments, each with a goal score that rag-lab checks against your runs. The goals were
+Ten small experiments, each with a goal score that rag-lab checks against your runs. The goals were
 measured on SciFact, so each is reachable, but only with the lesson's idea.
 
 | # | Lesson | You learn | Goal |
@@ -63,14 +64,15 @@ measured on SciFact, so each is reachable, but only with the lesson's idea.
 | 5 | Does Reranking Help Here? | measuring a reranker (it hurts on SciFact) | self-check |
 | 6 | Write Your Own Retriever | that every node is just Python | recall@10 ≥ 84 with your script |
 | 7 | Chunking Changes Everything | chunk size versus precision and context | self-check |
-| 8 | Let Claude Answer | answers with citations and an LLM judge | correctness ≥ 60 (API key) |
-| 9 | Agentic RAG | when an agent that searches again is worth it | correctness ≥ 80 (API key) |
+| 8 | GraphRAG: When Does a Graph Help? | knowledge graphs and graph search, measured | recall@10 ≥ 85.5 with the graph |
+| 9 | Let Claude Answer | answers with citations and an LLM judge | correctness ≥ 60 (API key) |
+| 10 | Agentic RAG | when an agent that searches again is worth it | correctness ≥ 80 (API key) |
 
 ![Lessons](docs/screenshots/00-lessons.png)
 
 ## How it works
 
-![How rag-lab works: a dataset of raw documents, questions and gold documents and answers; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/how-rag-lab-works.png)
+![How rag-lab works: a dataset of raw documents, questions and gold documents and answers; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/rag-lab-overview.png)
 
 1. **Dataset.** Every benchmark dataset has three parts that belong together: the raw documents (the
    corpus to search), the questions, and the gold documents and gold answers for each question.
@@ -180,7 +182,7 @@ The **How it works** page and the **Glossary** inside the app explain every conc
 | Thing | What it is |
 |---|---|
 | **Dataset** | Source documents **plus benchmark questions** (both required). Comes from a built-in data source or a Python script. Versioned: every ingest that changes something is a snapshot. |
-| **Target** | A named, persistent store that chunks are written to and searched in. Built-in: local (vectors + BM25), PostgreSQL + pgvector, any SQL database, Qdrant, OpenSearch, Elasticsearch. Or a Python script for your own store. |
+| **Target** | A named, persistent store that chunks are written to and searched in. Built-in: local (vectors + BM25), knowledge graph (local + a graph in LadybugDB), PostgreSQL + pgvector, any SQL database, Qdrant, OpenSearch, Elasticsearch. Or a Python script for your own store. |
 | **Ingestion pipeline** | `source → (transform) → chunk → (embed) → target`. Running it writes to the target, **appending** or **overwriting** as the target node says. Can branch to fill several targets. |
 | **Retrieval pipeline** | `target → retrieve → rerank → generate → benchmark`. Running it answers the dataset's questions from the target and scores the result. |
 
@@ -338,9 +340,8 @@ reconstructable and runs record exactly which documents they saw. A folder witho
 refused. Pipelines read from the store, not the folder, so formats are parsed once, not on every run.
 
 The store knows nothing about chunks, vectors or indexes: those are made by ingestion pipelines. So
-the same loaded dataset can feed any kind of pipeline, including future ones (a graph-building
-ingestion, for example, would read the same documents and write entities and relations instead of
-chunks).
+the same loaded dataset can feed any kind of pipeline, including a knowledge graph (see
+[GraphRAG](#graphrag-knowledge-graph-targets)).
 
 Each dataset's page has:
 - **Overview**: document count, approximate tokens, length percentiles and a length histogram, source
@@ -379,6 +380,7 @@ chunks), vector search (`bge-small`) got recall@10 82.8 and BM25 got 81.8.
 | Target type | Keyword search | Vector search | Needs |
 |---|---|---|---|
 | `local` | BM25 (DuckDB FTS) | exact, in numpy | nothing |
+| `graph` | BM25 (DuckDB FTS) | exact, in numpy | nothing; adds graph search (see GraphRAG) |
 | `pgvector` | Postgres full-text (`ts_rank_cd`, words OR-ed) | HNSW, cosine | Postgres with the `vector` extension |
 | `sql` | BM25, local index | exact, local index | any SQLAlchemy database (SQLite file by default) |
 | `qdrant` | – | yes | nothing (embedded on disk), or a Qdrant URL |
@@ -536,6 +538,42 @@ answered: the mean difference with a 95% bootstrap confidence interval, a paired
 (p-value), and how many questions each run won. It says plainly when a gap could be noise, and
 warns below 30 questions. With 20 questions, differences of 10 points or more are often noise.
 
+## GraphRAG: knowledge graph targets
+
+A **Knowledge graph** target is a local store (BM25 + vectors) plus a graph in
+[LadybugDB](https://github.com/LadybugDB/ladybug), an embedded graph database queried with Cypher
+(a maintained fork of Kùzu). Nothing to install or run. After every write the graph is rebuilt from the
+chunks:
+
+```
+(:Chunk)-[:Mentions]->(:Entity)              the distinctive terms of each chunk (TF-IDF, no LLM)
+(:Entity)-[:Related {weight}]->(:Entity)     terms that share chunks; weight = how many
+```
+
+**Graph search** finds the question's terms in the graph, follows `Related` to each one's strongest
+neighbours, and ranks chunks by the terms they mention, rarer terms counting more. Use it as the
+`graph` retrieve node, or add it to hybrid search with `graph_weight`, next to `bm25_weight` and
+`vector_weight`. Scripts can call `search.graph(question, k)`.
+
+Measured on SciFact (300 questions, `bge-small`, 1,200-character chunks):
+
+| Retrieval | recall@10 | nDCG@10 |
+|---|---|---|
+| graph search alone | 60.0 | 43.0 |
+| hybrid (BM25 + vectors) | 85.0 | 72.8 |
+| hybrid + graph (`graph_weight` 0.5) | 85.7 | 69.9 |
+
+On SciFact the graph adds little: each question is about one claim, which BM25 and vectors already
+find. Graphs are meant for questions that connect facts across documents; lesson 8 asks you to find
+out where they pay off. The settings (terms per chunk, document-frequency limits, neighbours followed)
+are on the target. To explore the graph yourself:
+
+```python
+import ladybug
+con = ladybug.Connection(ladybug.Database("data/targets/<target id>/graph.lbdb", read_only=True))
+con.execute("MATCH (a:Entity {name: 'insulin'})-[r:Related]-(b) RETURN b.name, r.weight ORDER BY r.weight DESC LIMIT 10")
+```
+
 ## Generating answers: single pass or agentic
 
 A retrieval pipeline's generate node answers each question with Claude:
@@ -574,7 +612,7 @@ backend/rag_lab/
   cli.py          typer CLI
   datasets/       readers for dataset folders (enterprise_rag_bench, folder)
   data.py         dataset folders, extractors, versioned document store, snapshots, subsets, metrics
-  targets/        target types (local, pgvector, sql, qdrant, opensearch, elasticsearch, script) + manifest
+  targets/        target types (local, graph, pgvector, sql, qdrant, opensearch, elasticsearch, script) + manifest
   services.py     the docker-compose database services: URLs and reachability
   stages/         load, transform, chunk, embed, retrieve, rerank, generate, evaluate
   db.py           every DuckDB connection: memory cap, spill directory
@@ -613,15 +651,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and worked examples.
 
 ## Roadmap
 
-- **Graph database / GraphRAG.** An ingestion pipeline that extracts entities and relations from the
-  same loaded documents into a graph target (e.g. Neo4j, Kùzu or Memgraph), and retrieval that walks
-  the graph (local and global community search), benchmarked side by side with vector and hybrid
-  search on the same questions.
+- **Richer GraphRAG.** Entities and relations extracted by an LLM (the graph target now uses
+  TF-IDF terms), community summaries for global questions, multi-hop benchmarks, and Neo4j as a
+  server-backed graph target.
 - **More rerankers and embedders.** Hosted embedding and rerank APIs as built-in nodes, alongside the
   local models.
 - **Query transformation nodes.** Query rewriting, HyDE and multi-query expansion before retrieval.
-- **More lessons.** Structure-aware chunking, query rewriting, metadata filters, and GraphRAG once
-  the graph target lands.
+- **More lessons.** Structure-aware chunking, query rewriting, metadata filters.
 - **Cost and latency views.** Quality against cost and latency per pipeline, to pick the cheapest
   pipeline that is good enough.
 - **More evaluation.** Faithfulness / groundedness checks and human-labelled spot checks.

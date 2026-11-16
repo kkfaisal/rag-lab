@@ -7,11 +7,11 @@ import ParamForm from '../components/ParamForm'
 import { Empty, ErrorNote, PageHead, Pill, Stat } from '../components/ui'
 
 const TYPE_LABEL: Record<string, string> = {
-  local: 'Local store', pgvector: 'PostgreSQL + pgvector', sql: 'SQL database', qdrant: 'Qdrant', opensearch: 'OpenSearch',
+  local: 'Local store', graph: 'Knowledge graph', pgvector: 'PostgreSQL + pgvector', sql: 'SQL database', qdrant: 'Qdrant', opensearch: 'OpenSearch',
   elasticsearch: 'Elasticsearch', python: 'Python script',
 }
 const TYPE_HINT: Record<string, string> = {
-  local: 'Vectors + BM25 in a file on disk. No setup.', qdrant: 'Vector database: embedded on disk, or a server URL.',
+  local: 'Vectors + BM25 in a file on disk. No setup.', graph: 'Local store + a knowledge graph of key terms (LadybugDB, embedded). For GraphRAG.', qdrant: 'Vector database: embedded on disk, or a server URL.',
   pgvector: 'Vectors (HNSW) and full-text search in Postgres.',
   sql: 'Any SQLAlchemy database (Postgres, MySQL, SQL Server, Oracle, SQLite…): the Python counterpart of JDBC.',
   opensearch: 'BM25 and k-NN on an OpenSearch cluster.', elasticsearch: 'BM25 and k-NN on Elasticsearch 9.',

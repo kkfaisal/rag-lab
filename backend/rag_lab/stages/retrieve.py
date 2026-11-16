@@ -23,6 +23,7 @@ class HybridConfig(TopKConfig):
     rrf_k: int = 60           # Reciprocal Rank Fusion constant: score = Σ 1/(rrf_k + rank)
     bm25_weight: float = 1.0
     vector_weight: float = 1.0
+    graph_weight: float = 0.0   # > 0 adds graph search (needs a graph target)
 
 
 class PythonRetrieveConfig(TopKConfig):
@@ -30,7 +31,7 @@ class PythonRetrieveConfig(TopKConfig):
 
 
 class Search:
-    """The two primitive searches over a target. Built-in retrievers and script
+    """The primitive searches over a target (graph search only on graph targets). Built-in retrievers and script
     nodes are both written against this, so they work with any target type."""
 
     def __init__(self, ctx: StageContext):
@@ -52,6 +53,11 @@ class Search:
         else:                                                 # same model + prefix as the chunks
             qv = encode(self.embed["model"], [self.embed["query_prefix"] + query], self.embed["max_seq_length"])[0]
         return self.target.search_vector(qv, k, query=query)
+
+    def graph(self, query: str, k: int) -> list[dict]:
+        if not self.target.graph_search:
+            raise SystemExit("This target has no knowledge graph. Use a graph target, or BM25 / vector retrieval.")
+        return self.target.search_graph(query, k)
 
     def close(self) -> None:
         pass
@@ -92,11 +98,20 @@ def vector(cfg: TopKConfig, ctx: StageContext) -> dict:
     return _run(ctx, lambda q, s: s.vector(q, cfg.top_k))
 
 
+@register("retrieve", "graph", TopKConfig)
+def graph(cfg: TopKConfig, ctx: StageContext) -> dict:
+    """Knowledge-graph search: the question's terms, their related terms, and the chunks that mention them."""
+    return _run(ctx, lambda q, s: s.graph(q, cfg.top_k))
+
+
 @register("retrieve", "hybrid", HybridConfig)
 def hybrid(cfg: HybridConfig, ctx: StageContext) -> dict:
-    """BM25 + vector, merged with Reciprocal Rank Fusion."""
-    return _run(ctx, lambda q, s: rrf([(cfg.bm25_weight, s.bm25(q, cfg.candidates)),
-                                       (cfg.vector_weight, s.vector(q, cfg.candidates))], cfg.rrf_k, cfg.top_k))
+    """BM25 + vector (+ graph, when graph_weight > 0), merged with Reciprocal Rank Fusion."""
+    def fused(q, s):
+        lists = [(w, search(q, cfg.candidates)) for w, search in
+                 [(cfg.bm25_weight, s.bm25), (cfg.vector_weight, s.vector), (cfg.graph_weight, s.graph)] if w > 0]
+        return rrf(lists, cfg.rrf_k, cfg.top_k)
+    return _run(ctx, fused)
 
 
 @register("retrieve", "python", PythonRetrieveConfig)

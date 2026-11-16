@@ -44,7 +44,7 @@ LESSONS = [
 
     {"id": "hybrid", "level": "Core", "title": "Best of Both: Hybrid Search",
      "learn": "How Reciprocal Rank Fusion merges keyword and vector results, so each covers the other's blind spots.",
-     "goal": {"dataset": "scifact", "where": {"retrieve.impl": "hybrid", "rerank.impl": "none"}, "metric": "recall@10", "at_least": 84, "min_questions": 300},
+     "goal": {"dataset": "scifact", "where": {"retrieve.impl": "hybrid", "rerank.impl": "none", "retrieve.graph_weight": {"le": 0}}, "metric": "recall@10", "at_least": 84, "min_questions": 300},
      "steps": ["Open [Retrieval → Hybrid + rerank](/retrieval/hybrid-rerank) and press **Duplicate**.",
                "In the copy, select the **rerank** node and press Backspace, then connect retrieve to benchmark. "
                "Clear the Benchmark node's question limit and run it against **Local store**.",
@@ -85,6 +85,25 @@ LESSONS = [
      "takeaway": "Smaller chunks match a question more precisely but lose surrounding context; bigger ones keep context but dilute "
                  "the match. The best size depends on your documents, so measure it."},
 
+    {"id": "graphrag", "level": "Core", "title": "GraphRAG: When Does a Graph Help?",
+     "learn": "How a knowledge graph links chunks through related terms, how graph search follows those links, "
+              "and how to tell whether a graph earns its place next to BM25 and vectors.",
+     "goal": {"dataset": "scifact", "where": {"retrieve.impl": "hybrid", "retrieve.graph_weight": {"gt": 0}},
+              "metric": "recall@10", "at_least": 85.5, "min_questions": 300},
+     "steps": ["In [Targets](/targets), add a **Knowledge graph** target named “SciFact graph”. It keeps BM25 and vectors, and "
+               "adds a graph in LadybugDB, an embedded graph database.",
+               "Duplicate [Baseline ingestion](/ingestion/baseline-ingestion), point its target node at **SciFact graph** and run it. "
+               "The write step's log says how many entities and relations the graph has.",
+               "Duplicate your hybrid pipeline from lesson 4. Set the retrieve node's **graph_weight** to 0.5, clear the question "
+               "limit, and run it against **SciFact graph**.",
+               "Also try retrieve **graph** on its own, and graph_weight 1.0. Then [Compare](/diff) hybrid with hybrid + graph: "
+               "which moved, recall@10 or nDCG@10? Is the difference real?"],
+     "hints": ["Entities here are distinctive words and phrases, found without an LLM; Related links terms that share chunks.",
+               "graph_weight sets how much the graph's ranking counts in the fusion, next to bm25_weight and vector_weight."],
+     "takeaway": "On SciFact a term graph alone is weak (recall@10 about 60) and adds little to hybrid search: recall@10 85.0 → 85.7, "
+                 "nDCG@10 72.8 → 69.9. SciFact asks about one claim at a time. Graphs are built for questions that connect "
+                 "facts across documents, so try the same experiment on a multi-hop dataset such as HotpotQA."},
+
     {"id": "generate", "level": "Advanced", "title": "Let Claude Answer",
      "needs": "An ANTHROPIC_API_KEY in .env and EnterpriseRAG-Bench (1.3 GB) loaded, with its dev subset.",
      "learn": "How retrieved chunks become an answer with citations, and how an LLM judge scores it against the gold answer.",
@@ -108,7 +127,14 @@ LESSONS = [
 
 
 def _matches(params: dict, where: dict) -> bool:
-    return all(params.get(k, "none" if k.endswith(".impl") else None) == v for k, v in where.items())
+    """`where` values are exact, or {"gt": x} / {"le": x} for numbers (a setting older runs lack counts as 0)."""
+    def ok(k, v):
+        got = params.get(k, "none" if k.endswith(".impl") else None)
+        if not isinstance(v, dict):
+            return got == v
+        got = got or 0
+        return got > v["gt"] if "gt" in v else got <= v["le"]
+    return all(ok(k, v) for k, v in where.items())
 
 
 def with_status() -> list[dict]:

@@ -27,17 +27,18 @@ you edit in the browser, so you can read, change and own every line.
 
 ## How it works
 
-![How rag-lab works: a data source with raw documents and a gold set; raw documents go through the ingestion pipeline into a target; the retrieval pipeline answers the questions from the target; retrieved results are compared with the gold documents and gold answers to produce the benchmark](docs/rag-lab-flow.png)
+![How rag-lab works: a data source with raw documents and a gold set; raw documents go through the ingestion pipeline into a target; the retrieval pipeline searches the target; each question with its retrieved results is compared with the gold documents and gold answers to produce the benchmark](docs/rag-lab-flow.png)
 
 1. **Data source.** Every dataset has two parts: the raw documents, and a gold set of questions with
    their gold documents and, where available, gold answers.
 2. **Ingestion pipeline.** The raw documents are transformed, chunked and optionally embedded...
 3. **...into a target**, the index that retrieval searches: local, pgvector, Qdrant, OpenSearch,
    Elasticsearch, any SQL database or your own script.
-4. **Retrieval pipeline.** Each question is retrieved (BM25, vector or hybrid), optionally reranked,
-   and answered by Claude in one pass or as an agent. The search box lets you try any query live.
-5. **Compare with the gold set.** Retrieved documents are scored against the gold documents (recall@k,
-   nDCG, MRR) and generated answers against the gold answers (LLM judge).
+4. **Retrieval pipeline.** Retrieves from the target (BM25, vector or hybrid), optionally reranks, and
+   answers with Claude in one pass or as an agent. The search box lets you try any query live.
+5. **Compare with the gold set.** Each question is joined with its retrieved results. Retrieved
+   documents are scored against the gold documents (recall@k, nDCG, MRR) and generated answers against
+   the gold answers (LLM judge).
 6. **Benchmark.** Scores per run and per question, a results matrix across targets and pipelines, and
    run-to-run comparisons that say whether a change really helped.
 

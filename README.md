@@ -1,13 +1,147 @@
 # rag-lab
 
-An open-source, end-to-end **playground for RAG pipelines**. Bring data, build ingestion and
-retrieval pipelines on a node canvas, run them from the browser, and benchmark every combination
-against a question set.
+**Learn to build a really good RAG pipeline, end to end, by measuring it.**
 
-| | |
-|---|---|
-| ![A retrieval pipeline with an agentic generate node](docs/screenshots/pipeline.png) | ![Comparing single-pass and agentic RAG with a paired significance test](docs/screenshots/compare.png) |
-| ![The How it works page](docs/screenshots/how-it-works.png) | ![All retrieval pipelines](docs/screenshots/retrieval.png) |
+> AI can write a RAG pipeline if you ask it to. But how do you learn to write a *really good* one?
+> How do you know whether hybrid search beats vector search on *your* data, whether a reranker
+> earns its latency, or whether an agent actually answers better than a single prompt?
+>
+> **rag-lab is the answer: a hands-on lab where every step of RAG is visible, editable and scored.**
+
+rag-lab is an open-source learning tool and playground for Retrieval-Augmented Generation. Load a
+real benchmark, build ingestion and retrieval pipelines on a node canvas, run them, and see exactly
+which questions each change fixed or broke, with a significance test that tells you whether the
+difference is real or noise. Every node is either a built-in with a settings form or a Python script
+you edit in the browser, so you can read, change and own every line.
+
+**What you learn by using it**
+
+- How chunking, embedding, keyword (BM25), vector and hybrid search, reranking and generation each
+  change retrieval quality, in numbers instead of opinions.
+- How to read RAG metrics: recall@k, nDCG, MRR, context recall, answer correctness.
+- How to tell a real improvement from noise (paired permutation test, bootstrap intervals).
+- How single-pass RAG compares with agentic RAG that searches again on its own.
+- How the same pipeline behaves on different vector stores: local, pgvector, Qdrant, OpenSearch,
+  Elasticsearch, any SQL database.
+- How to debug a pipeline: every run keeps each step's status, timing and log.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph D["1 · Data"]
+        A["Public benchmark or your own files<br/>(extractor script)"] --> B[("Document store<br/>docs + questions,<br/>versioned snapshots")]
+        B --> S["Subsets<br/>(dev, small …)"]
+    end
+    subgraph I["2 · Ingestion pipeline"]
+        SRC[source] --> TR["transform<br/>(optional)"] --> CH[chunk] --> EM["embed<br/>(optional)"] --> TG
+    end
+    subgraph T["3 · Targets"]
+        TG[("local · pgvector · Qdrant ·<br/>OpenSearch · Elasticsearch ·<br/>SQL · your script")]
+    end
+    subgraph R["4 · Retrieval pipeline"]
+        RT["retrieve<br/>BM25 / vector / hybrid"] --> RR[rerank] --> GE["generate<br/>Claude: single pass or agent"] --> BE[benchmark]
+    end
+    subgraph E["5 · Evaluate & learn"]
+        RES["Results matrix<br/>target × pipeline"] --> CMP["Compare two runs<br/>fixed / broken questions,<br/>significance test"] --> Q["Per question:<br/>gold vs retrieved, answer, judge"]
+    end
+    B --> SRC
+    S --> SRC
+    TG --> RT
+    BE --> RES
+    Q -. "change one node, run again" .-> I
+    Q -. "change one node, run again" .-> R
+```
+
+Every step is cached by its settings and code, so changing one node re-runs only that node and what
+follows it. Every run records its full config (scripts included), dataset snapshot, target version,
+per-step timings and logs, token usage and cost.
+
+## A walk through the tool
+
+### 1. Get a dataset
+
+The Datasets page lists public benchmarks (EnterpriseRAG-Bench, SciFact, NFCorpus, the BEIR sets).
+**Get** downloads the raw files with a Python extractor you can read first; **Load** puts them into
+the internal, versioned document store.
+
+![Datasets](docs/screenshots/01-datasets.png)
+
+Each dataset has an overview: document counts, token estimates, length distribution, question
+categories, and how many gold documents actually exist.
+
+![Dataset overview](docs/screenshots/02-dataset-overview.png)
+
+### 2. Make a subset to iterate fast
+
+Half a million documents is slow to experiment on. A **subset** picks some questions, keeps all
+their gold documents and adds random distractors, so search is still hard but runs in minutes.
+
+![Subsets](docs/screenshots/03-subsets.png)
+
+### 3. Choose where chunks live: targets
+
+A target is a persistent store that chunks are written to and searched in. The local store needs
+nothing; PostgreSQL + pgvector, Qdrant, OpenSearch and Elasticsearch come with docker compose.
+
+![Targets](docs/screenshots/04-targets.png)
+
+### 4. Build an ingestion pipeline
+
+`source → transform → chunk → embed → target` on a canvas. One pipeline can branch to fill several
+targets, for example one with vectors and one BM25-only. The **Run history** below the canvas shows
+every run with each step's status and time.
+
+![Ingestion pipeline](docs/screenshots/05-ingestion.png)
+
+### 5. Read and edit the code of any step
+
+Every node, built-in or not, opens as Python in a full-window editor with a live contract check,
+version history and optional AI help (Claude proposes a change as a diff you accept or discard).
+This is where the learning happens: see how a chunker works, change it, measure the effect.
+
+![Script editor](docs/screenshots/06-script-editor.png)
+
+### 6. Build a retrieval pipeline
+
+`target → retrieve → rerank → generate → benchmark`. Try BM25, vector or hybrid retrieval, a
+cross-encoder reranker, and Claude answering in one pass or as an agent that searches again.
+
+![Retrieval pipeline](docs/screenshots/07-retrieval.png)
+
+### 7. Debug a failed run
+
+When a run fails, the failed node turns red and its step log opens with the error. Click any run in
+the history to show it on the canvas, and any node or step to read its log.
+
+![Run history and step logs](docs/screenshots/08-run-history-logs.png)
+
+### 8. Compare every combination
+
+The Results matrix shows the latest score for every target × retrieval pipeline.
+
+![Results](docs/screenshots/09-results.png)
+
+### 9. Drill into a run and a single question
+
+A run shows its metrics, per-category scores, timings and cost. A question shows the gold
+documents, the retrieved and reranked chunks (gold in green), the generated answer with citations,
+and the judge's verdict.
+
+![A run](docs/screenshots/10-run.png)
+
+![A single question](docs/screenshots/11-question.png)
+
+### 10. Is B really better than A?
+
+Compare two runs on the same questions: which were fixed, which broke, and a paired significance
+test that says plainly when a gap could be noise.
+
+![Compare two runs](docs/screenshots/12-compare.png)
+
+The **How it works** page and the **Glossary** inside the app explain every concept and metric.
+
+![How it works](docs/screenshots/13-how-it-works.png)
 
 ## The model
 
@@ -35,7 +169,7 @@ snapshot, target version, per-stage timings, token usage and cost.
 Requirements: Docker with Compose.
 
 ```bash
-git clone <this repo> rag-lab && cd rag-lab
+git clone https://github.com/kkfaisal/rag-lab.git && cd rag-lab
 cp .env.example .env                      # optional: put your ANTHROPIC_API_KEY in .env
 docker compose up -d                      # rag-lab + PostgreSQL/pgvector + Qdrant
 docker compose --profile search up -d     # also OpenSearch and Elasticsearch (~1 GB RAM each)
@@ -66,7 +200,7 @@ To run only the databases and rag-lab itself with uv: `docker compose up -d post
 Requirements: [uv](https://docs.astral.sh/uv/), Node 20+, git.
 
 ```bash
-git clone <this repo> rag-lab && cd rag-lab
+git clone https://github.com/kkfaisal/rag-lab.git && cd rag-lab
 uv sync                                   # Python deps (Python 3.12 is pinned)
 cp .env.example .env                      # optional: put your ANTHROPIC_API_KEY in .env
 cd web && npm install && npm run build && cd ..
@@ -444,6 +578,23 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and worked examples.
 - The local target's vector search is exact brute force; fine for ~100k chunks, memory-hungry for millions.
 - Benchmark runs store retrieved chunk text in the run folder (self-contained, but a few MB per run).
 - Claude requests opt into server-side refusal fallback (`refusal_fallback` on the generate node).
+
+## Roadmap
+
+- **Graph database / GraphRAG.** An ingestion pipeline that extracts entities and relations from the
+  same loaded documents into a graph target (e.g. Neo4j, Kùzu or Memgraph), and retrieval that walks
+  the graph (local and global community search), benchmarked side by side with vector and hybrid
+  search on the same questions.
+- **More rerankers and embedders.** Hosted embedding and rerank APIs as built-in nodes, alongside the
+  local models.
+- **Query transformation nodes.** Query rewriting, HyDE and multi-query expansion before retrieval.
+- **Guided lessons.** Step-by-step exercises inside the app ("make recall@10 beat 85 on SciFact"),
+  with hints that point at the node to change.
+- **Cost and latency views.** Quality against cost and latency per pipeline, to pick the cheapest
+  pipeline that is good enough.
+- **More evaluation.** Faithfulness / groundedness checks and human-labelled spot checks.
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

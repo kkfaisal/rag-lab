@@ -28,6 +28,14 @@ you edit in the browser, so you can read, change and own every line.
   Elasticsearch, any SQL database.
 - How to debug a pipeline: every run keeps each step's status, timing and log.
 
+## Walkthrough: from a dataset to a benchmark
+
+Two minutes, end to end: load SciFact, look at a target, open the ingestion and retrieval
+pipelines and their Python, run a benchmark, find a question BM25 missed, and compare BM25 with
+vector search.
+
+![Walkthrough: datasets, targets, the ingestion canvas and its Python, a BM25 retrieval pipeline and a test query, running a benchmark on 300 SciFact questions, a question BM25 missed because of a typo, comparing BM25 with vector search and the significance test, and the guided lessons](docs/walkthrough.gif)
+
 ## Try it in two minutes
 
 No API key needed. You need [uv](https://docs.astral.sh/uv/) and Node 20+.

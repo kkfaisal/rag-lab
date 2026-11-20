@@ -6,6 +6,8 @@ import { MetricHelp, Term } from '../components/Glossary'
 
 const display = (v: unknown) => (typeof v === 'object' ? JSON.stringify(v) : String(v))
 const STAGES = ['target', 'retrieve', 'rerank', 'generate', 'evaluate']
+// Per-question columns in the Questions table.
+const Q_METRICS = ['recall@1', 'recall@5', 'recall@10', 'answer_recall', 'correctness', 'completeness']
 
 export default function RunPage() {
   const { runId } = useParams()
@@ -107,13 +109,13 @@ export default function RunPage() {
       <div className="section-title">Questions</div>
       <div className="table-wrap"><table>
         <thead><tr><th>id</th><th>category</th><th>question</th>
-          {['recall@10', 'answer_recall', 'correctness', 'completeness'].map(m => <th key={m} className="num"><Term k={m} /></th>)}</tr></thead>
+          {Q_METRICS.map(m => <th key={m} className="num"><Term k={m} /></th>)}</tr></thead>
         <tbody>{qs.map(q => (
           <tr key={q.question_id}>
             <td><Link to={`/runs/${runId}/q/${q.question_id}`}>{q.question_id}</Link></td>
             <td className="small">{q.category}</td>
             <td className="small">{q.question}</td>
-            {['recall@10', 'answer_recall', 'correctness', 'completeness'].map(m => (
+            {Q_METRICS.map(m => (
               <td key={m} className="num" style={{ background: heat(q[m] as number) }}>{fmt(q[m])}</td>))}
           </tr>))}</tbody>
       </table></div>
